@@ -1,0 +1,33 @@
+# Android / Gradle
+*.iml
+.gradle/
+.kotlin/
+**/build/
+/captures
+.externalNativeBuild
+.cxx
+
+# IDE
+.idea/
+*.hprof
+
+# Local configuration
+/local.properties
+local.properties
+
+# Built release artifacts
+/app/release/
+*.apk
+*.aab
+
+# Signing and secrets
+/Key/
+*.jks
+*.keystore
+*.p12
+*.pem
+google-services.json
+
+# OS
+.DS_Store
+Thumbs.db
