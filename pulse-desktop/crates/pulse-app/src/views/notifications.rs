@@ -17,7 +17,7 @@ use crate::theme;
 use crate::views::{badge, card_with, dark, empty_state, muted, muted_color};
 
 /// Одна карточка ленты.
-struct Notice {
+pub(crate) struct Notice {
     icon: &'static str,
     group: &'static str,
     title: String,
@@ -94,7 +94,7 @@ impl PulseApp {
     }
 
     /// Собирает ленту в порядке важности. Пустой результат — «всё хорошо».
-    fn collect_notices(&self) -> Vec<Notice> {
+    pub(crate) fn collect_notices(&self) -> Vec<Notice> {
         let today = self.today();
         let now = self.now();
         let tomorrow = today.succ_opt().unwrap_or(today);

@@ -6,6 +6,7 @@ use pulse_core::datetime;
 use pulse_core::model::{now_lessons, LessonPair};
 
 use crate::app::PulseApp;
+use crate::store::Role;
 use crate::theme;
 use crate::views::{
     badge, card, dark, empty_state, muted, muted_color, subject_visual,
@@ -13,6 +14,12 @@ use crate::views::{
 
 impl PulseApp {
     pub(crate) fn ui_schedule(&mut self, ui: &mut egui::Ui) {
+        // У преподавателя та же вкладка, но с его личными парами.
+        if self.settings.role == Role::Teacher {
+            self.ui_my_schedule(ui);
+            return;
+        }
+
         let dark = dark(ui);
         ui.horizontal(|ui| {
             ui.label(egui::RichText::new("Расписание").size(22.0).strong());
@@ -156,7 +163,7 @@ impl PulseApp {
             );
         } else {
             for lesson in &lessons {
-                lesson_card(ui, lesson, date == today, now);
+                lesson_card(ui, lesson, date == today, now, &self.active_group);
             }
         }
 
@@ -259,7 +266,13 @@ impl PulseApp {
     }
 }
 
-fn lesson_card(ui: &mut egui::Ui, lesson: &LessonPair, is_today: bool, now: chrono::NaiveTime) {
+fn lesson_card(
+    ui: &mut egui::Ui,
+    lesson: &LessonPair,
+    is_today: bool,
+    now: chrono::NaiveTime,
+    group: &str,
+) {
     let active = is_today
         && lesson
             .start_local_time()
@@ -274,12 +287,17 @@ fn lesson_card(ui: &mut egui::Ui, lesson: &LessonPair, is_today: bool, now: chro
         crate::views::border_color(ui)
     };
 
+    // Ширину задаём явно: без этого карточка сжимается по содержимому.
+    let width = ui.available_width();
     egui::Frame::new()
         .fill(theme::surface(dark(ui)))
         .stroke(egui::Stroke::new(if active { 1.5 } else { 1.0 }, stroke_color))
         .inner_margin(egui::Margin::same(14))
         .corner_radius(egui::CornerRadius::same(12))
         .show(ui, |ui| {
+            ui.set_min_width((width - 28.0).max(0.0));
+            // Метки стоят в строке предмета: выравнивание по правому краю
+            // растягивало карточку на всю доступную высоту.
             ui.horizontal_top(|ui| {
                 ui.vertical(|ui| {
                     ui.label(
@@ -300,26 +318,23 @@ fn lesson_card(ui: &mut egui::Ui, lesson: &LessonPair, is_today: bool, now: chro
                                 .strong()
                                 .color(color),
                         );
+                        if active {
+                            badge(ui, "сейчас", color);
+                        }
                     });
-                    muted(
-                        ui,
-                        format!("{} · ауд. {}", lesson.teacher, lesson.room),
-                    );
-                });
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if active {
-                        badge(ui, "сейчас", color);
+                    let mut info = format!("{} · ауд. {}", lesson.teacher, lesson.room);
+                    // Группу пишем только если она не совпадает с выбранной в шапке.
+                    if !lesson.group.is_empty() && !lesson.group.eq_ignore_ascii_case(group) {
+                        info.push_str(&format!(" · гр. {}", lesson.group));
                     }
-                    if !lesson.group.is_empty() {
-                        badge(ui, &lesson.group, muted_color(ui));
-                    }
+                    muted(ui, info);
                 });
             });
         });
     ui.add_space(8.0);
 }
 
-fn shift_days(date: NaiveDate, days: i64) -> NaiveDate {
+pub(crate) fn shift_days(date: NaiveDate, days: i64) -> NaiveDate {
     if days >= 0 {
         date.checked_add_days(Days::new(days as u64))
             .unwrap_or(date)

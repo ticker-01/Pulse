@@ -8,7 +8,7 @@ use pulse_core::model::ScheduleCache;
 use pulse_core::performance::{Semester, ROUNDING_HUNDREDTHS, ROUNDING_TENTHS, ROUNDING_WHOLE};
 
 use crate::app::{BellsEditor, PulseApp, StatusKind};
-use crate::store::Settings;
+use crate::store::{Role, Settings};
 use crate::theme;
 use crate::views::{badge, card, dark, muted, muted_color, section_title};
 
@@ -49,67 +49,142 @@ impl PulseApp {
         let mut actions: Vec<SettingAction> = Vec::new();
         let mut dirty = false;
 
-        // ── профиль ─────────────────────────────────────────────────────────
-        section_title(ui, "Профиль");
+        // ── роль ────────────────────────────────────────────────────────────
+        section_title(ui, "Роль");
         card(ui, |ui| {
-            egui::Grid::new("settings-profile")
-                .num_columns(2)
-                .spacing([12.0, 8.0])
-                .show(ui, |ui| {
-                    ui.label("Имя");
-                    dirty |= ui
-                        .add(
-                            egui::TextEdit::singleline(&mut self.settings.user_name)
-                                .hint_text("Как обращаться")
-                                .desired_width(240.0),
-                        )
-                        .changed();
-                    ui.end_row();
-
-                    let group_label = ui.label("Группа");
-                    let current = if self.active_group.is_empty() {
-                        "не выбрана".to_string()
-                    } else {
-                        self.active_group.clone()
-                    };
-                    let mut chosen: Option<String> = None;
-                    ui.horizontal(|ui| {
-                        let combo = egui::ComboBox::from_id_salt("settings-group")
-                            .selected_text(current)
-                            .width(180.0)
-                            .show_ui(ui, |ui| {
-                                if self.groups.is_empty() {
-                                    ui.label(egui::RichText::new("список пуст").color(muted_color(ui)));
-                                }
-                                for group in &self.groups {
-                                    let selected = group.eq_ignore_ascii_case(&self.active_group);
-                                    if ui.selectable_label(selected, group).clicked() {
-                                        chosen = Some(group.clone());
-                                    }
-                                }
-                            });
-                        combo.response.labelled_by(group_label.id);
-                        if !self.groups.is_empty() && ui.small_button("сбросить").clicked() {
-                            chosen = Some(String::new());
-                        }
-                    });
-                    if let Some(group) = chosen {
-                        if group.is_empty() {
-                            self.clear_group();
-                        } else {
-                            self.set_active_group(group);
-                        }
+            let mut role = self.settings.role;
+            ui.horizontal(|ui| {
+                ui.label("Я");
+                for value in [Role::Student, Role::Teacher] {
+                    if ui
+                        .add(egui::Button::new(value.label()).selected(role == value))
+                        .clicked()
+                    {
+                        role = value;
                     }
-                    ui.end_row();
-                });
+                }
+            });
+            if role != self.settings.role {
+                self.set_role(role);
+            }
             muted(
                 ui,
-                if self.groups.is_empty() {
-                    "Список групп появится после первой загрузки расписания."
-                } else {
-                    "Доступные группы взяты из последнего загруженного расписания."
+                match self.settings.role {
+                    Role::Student => {
+                        "Студент: своё расписание, оценки, задания и напоминания."
+                    }
+                    Role::Teacher => {
+                        "Преподаватель: свои пары по дням и расписание любой группы."
+                    }
                 },
             );
+        });
+
+        // ── профиль ─────────────────────────────────────────────────────────
+        section_title(ui, "Профиль");
+        card(ui, |ui| match self.settings.role {
+            Role::Student => {
+                egui::Grid::new("settings-profile")
+                    .num_columns(2)
+                    .spacing([12.0, 8.0])
+                    .show(ui, |ui| {
+                        ui.label("Имя");
+                        dirty |= ui
+                            .add(
+                                egui::TextEdit::singleline(&mut self.settings.user_name)
+                                    .hint_text("Как обращаться")
+                                    .desired_width(240.0),
+                            )
+                            .changed();
+                        ui.end_row();
+
+                        let group_label = ui.label("Группа");
+                        let current = if self.active_group.is_empty() {
+                            "не выбрана".to_string()
+                        } else {
+                            self.active_group.clone()
+                        };
+                        let mut chosen: Option<String> = None;
+                        ui.horizontal(|ui| {
+                            let combo = egui::ComboBox::from_id_salt("settings-group")
+                                .selected_text(current)
+                                .width(180.0)
+                                .show_ui(ui, |ui| {
+                                    if self.groups.is_empty() {
+                                        ui.label(
+                                            egui::RichText::new("список пуст")
+                                                .color(muted_color(ui)),
+                                        );
+                                    }
+                                    for group in &self.groups {
+                                        let selected =
+                                            group.eq_ignore_ascii_case(&self.active_group);
+                                        if ui.selectable_label(selected, group).clicked() {
+                                            chosen = Some(group.clone());
+                                        }
+                                    }
+                                });
+                            combo.response.labelled_by(group_label.id);
+                            if !self.groups.is_empty() && ui.small_button("сбросить").clicked() {
+                                chosen = Some(String::new());
+                            }
+                        });
+                        if let Some(group) = chosen {
+                            if group.is_empty() {
+                                self.clear_group();
+                            } else {
+                                self.set_active_group(group);
+                            }
+                        }
+                        ui.end_row();
+                    });
+                muted(
+                    ui,
+                    if self.groups.is_empty() {
+                        "Список групп появится после первой загрузки расписания."
+                    } else {
+                        "Доступные группы взяты из последнего загруженного расписания."
+                    },
+                );
+            }
+            Role::Teacher => {
+                ui.horizontal(|ui| {
+                    let label = ui.label("Я в справочнике");
+                    if self.teachers.is_empty() {
+                        muted(
+                            ui,
+                            "список пуст — сначала загрузите расписание",
+                        );
+                        return;
+                    }
+                    let current = if self.settings.teacher_name.trim().is_empty() {
+                        "не выбран".to_string()
+                    } else {
+                        self.settings.teacher_name.clone()
+                    };
+                    let mut chosen: Option<String> = None;
+                    let combo = egui::ComboBox::from_id_salt("settings-teacher")
+                        .selected_text(current)
+                        .width(220.0)
+                        .show_ui(ui, |ui| {
+                            for teacher in &self.teachers {
+                                let selected = teacher.name == self.settings.teacher_name;
+                                if ui.selectable_label(selected, &teacher.name).clicked() {
+                                    chosen = Some(teacher.name.clone());
+                                }
+                            }
+                        });
+                    combo.response.labelled_by(label.id);
+                    if let Some(name) = chosen {
+                        self.set_teacher_name(name);
+                    }
+                });
+                ui.add_space(4.0);
+                muted(
+                    ui,
+                    "Имя берётся из того же PDF: по нему строятся ваши пары и группы.",
+                );
+            }
         });
 
         // ── оформление ──────────────────────────────────────────────────────
@@ -369,7 +444,7 @@ impl PulseApp {
         section_title(ui, "О программе");
         card(ui, |ui| {
             ui.label(
-                egui::RichText::new("МГКАП · Pulse")
+                egui::RichText::new("МГКАП")
                     .size(16.0)
                     .strong()
                     .color(theme::color(self.settings.accent)),
@@ -468,6 +543,10 @@ impl PulseApp {
         self.selected_teacher = None;
         self.teacher_schedule = ScheduleCache::new();
         self.teacher_schedule_for = None;
+        self.teacher_week_mode = false;
+        self.group_view_group.clear();
+        self.group_view_schedule = ScheduleCache::new();
+        self.group_view_date = self.today();
         self.teacher_query.clear();
         self.bells_editor = None;
         self.subject_dialog = None;

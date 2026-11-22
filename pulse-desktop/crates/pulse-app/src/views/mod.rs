@@ -1,5 +1,6 @@
 //! Общие элементы интерфейса и подмодули вкладок.
 
+pub(crate) mod groups;
 pub(crate) mod homework;
 pub(crate) mod notifications;
 pub(crate) mod performance;

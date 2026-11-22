@@ -16,6 +16,24 @@ use serde::{Deserialize, Serialize};
 /// Акцентный цвет по умолчанию — как `PrimaryPurple` в Android-версии.
 pub const DEFAULT_ACCENT: u32 = 0xFF6C48E1;
 
+/// Кто пользуется приложением: от роли зависит набор вкладок.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Role {
+    #[default]
+    Student,
+    Teacher,
+}
+
+impl Role {
+    pub fn label(self) -> &'static str {
+        match self {
+            Role::Student => "Студент",
+            Role::Teacher => "Преподаватель",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct Settings {
@@ -27,6 +45,10 @@ pub struct Settings {
     pub auto_refresh: bool,
     pub last_pdf_url: String,
     pub last_pdf_file: String,
+    /// Роль пользователя; старые файлы без поля читаются как «студент».
+    pub role: Role,
+    /// Имя преподавателя для режима преподавателя (как в справочнике).
+    pub teacher_name: String,
 }
 
 impl Default for Settings {
@@ -40,6 +62,8 @@ impl Default for Settings {
             auto_refresh: true,
             last_pdf_url: String::new(),
             last_pdf_file: String::new(),
+            role: Role::Student,
+            teacher_name: String::new(),
         }
     }
 }

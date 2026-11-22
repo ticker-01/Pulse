@@ -11,7 +11,7 @@ use eframe::egui;
 use std::path::Path;
 use std::sync::Arc;
 
-pub const WINDOW_TITLE: &str = "МГКАП · Pulse";
+pub const WINDOW_TITLE: &str = "МГКАП";
 
 pub const BG_DARK: u32 = 0x101014;
 pub const SURFACE_DARK: u32 = 0x1C1C22;

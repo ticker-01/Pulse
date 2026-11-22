@@ -13,13 +13,14 @@ use pulse_core::parser;
 use pulse_core::performance::Semester;
 use pulse_core::source::{self, FetchOutcome};
 
-use crate::store::{Settings, Store};
+use crate::store::{Role, Settings, Store};
 use crate::theme;
 
 /// Разделы бокового меню.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Tab {
     Schedule,
+    Groups,
     Teachers,
     Performance,
     Homework,
@@ -28,7 +29,20 @@ pub(crate) enum Tab {
 }
 
 impl Tab {
-    pub(crate) const ALL: [Tab; 6] = [
+    /// Все вкладки приложения — перечисление для тестов.
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(crate) const ALL: [Tab; 7] = [
+        Tab::Schedule,
+        Tab::Groups,
+        Tab::Teachers,
+        Tab::Performance,
+        Tab::Homework,
+        Tab::Notifications,
+        Tab::Settings,
+    ];
+
+    /// Вкладки студента: учёба, справочник, оценки, задания, напоминания.
+    const STUDENT: [Tab; 6] = [
         Tab::Schedule,
         Tab::Teachers,
         Tab::Performance,
@@ -37,9 +51,21 @@ impl Tab {
         Tab::Settings,
     ];
 
+    /// Вкладки преподавателя: своё расписание, группы, справочник, настройки.
+    const TEACHER: [Tab; 4] = [Tab::Schedule, Tab::Groups, Tab::Teachers, Tab::Settings];
+
+    /// Набор вкладок для роли — от него зависит и навигация, и доступность экранов.
+    pub(crate) fn for_role(role: Role) -> &'static [Tab] {
+        match role {
+            Role::Student => &Self::STUDENT,
+            Role::Teacher => &Self::TEACHER,
+        }
+    }
+
     pub(crate) fn label(self) -> &'static str {
         match self {
             Tab::Schedule => "Расписание",
+            Tab::Groups => "Группы",
             Tab::Teachers => "Преподаватели",
             Tab::Performance => "Успеваемость",
             Tab::Homework => "Домашние задания",
@@ -51,11 +77,25 @@ impl Tab {
     pub(crate) fn icon(self) -> &'static str {
         match self {
             Tab::Schedule => "📅",
+            Tab::Groups => "👥",
             Tab::Teachers => "👤",
             Tab::Performance => "📊",
             Tab::Homework => "📝",
             Tab::Notifications => "🔔",
             Tab::Settings => "⚙",
+        }
+    }
+
+    /// Длинная подсказка при наведении на вкладку.
+    pub(crate) fn hint(self) -> &'static str {
+        match self {
+            Tab::Schedule => "Пары на день или неделю",
+            Tab::Groups => "Расписание любой группы колледжа",
+            Tab::Teachers => "Справочник и личное расписание преподавателя",
+            Tab::Performance => "Оценки, средний балл, риски и симуляция",
+            Tab::Homework => "Задания со сроками и остатком пар",
+            Tab::Notifications => "Что требует внимания прямо сейчас",
+            Tab::Settings => "Профиль, тема, звонки и данные",
         }
     }
 }
@@ -228,6 +268,12 @@ pub(crate) struct PulseApp {
     pub(crate) teacher_date: NaiveDate,
     pub(crate) teacher_schedule: ScheduleCache,
     pub(crate) teacher_schedule_for: Option<String>,
+    pub(crate) teacher_week_mode: bool,
+
+    /// Вкладка «Группы»: какую группу смотрит преподаватель и её расписание.
+    pub(crate) group_view_group: String,
+    pub(crate) group_view_schedule: ScheduleCache,
+    pub(crate) group_view_date: NaiveDate,
 
     pub(crate) subject_dialog: Option<SubjectDialog>,
     pub(crate) simulation_subject: Option<String>,
@@ -300,6 +346,10 @@ impl PulseApp {
             teacher_date: today,
             teacher_schedule: ScheduleCache::new(),
             teacher_schedule_for: None,
+            teacher_week_mode: false,
+            group_view_group: String::new(),
+            group_view_schedule: ScheduleCache::new(),
+            group_view_date: today,
             subject_dialog: None,
             simulation_subject: None,
             simulate_input: String::new(),
@@ -312,6 +362,18 @@ impl PulseApp {
 
         if let Some(warning) = warning {
             app.set_status(StatusKind::Error, warning);
+        }
+
+        // В режиме преподавателя сразу строим его расписание из сохранённого текста.
+        if app.settings.role == Role::Teacher {
+            let saved = app.settings.teacher_name.trim().to_string();
+            if saved.is_empty() {
+                if let Some(first) = app.teachers.first().map(|teacher| teacher.name.clone()) {
+                    app.set_teacher_name(first);
+                }
+            } else {
+                app.select_teacher(Some(saved));
+            }
         }
 
         if app.schedule.is_empty() && app.settings.auto_refresh {
@@ -401,6 +463,61 @@ impl PulseApp {
         self.rebuild_teacher_schedule();
     }
 
+    /// Переключает роль и подгоняет интерфейс под неё.
+    pub(crate) fn set_role(&mut self, role: Role) {
+        if self.settings.role == role {
+            return;
+        }
+        self.settings.role = role;
+        if !Tab::for_role(role).contains(&self.tab) {
+            self.tab = Tab::for_role(role)[0];
+        }
+        if role == Role::Teacher {
+            // Подставляем имя из справочника, чтобы экран не был пустым.
+            if self.settings.teacher_name.trim().is_empty() {
+                if let Some(first) = self.teachers.first() {
+                    self.settings.teacher_name = first.name.clone();
+                }
+            }
+            let name = self.settings.teacher_name.trim().to_string();
+            if !name.is_empty() {
+                self.select_teacher(Some(name));
+            }
+        }
+        self.save_settings();
+    }
+
+    /// Выбирает «себя» в режиме преподавателя.
+    pub(crate) fn set_teacher_name(&mut self, name: String) {
+        self.settings.teacher_name = name.clone();
+        self.save_settings();
+        self.select_teacher(Some(name));
+    }
+
+    /// Ctrl+1…N — переход по вкладкам текущей роли.
+    fn handle_shortcuts(&mut self, ctx: &egui::Context) {
+        // В текстовом поле цифры нужны самому полю ввода.
+        if ctx.egui_wants_keyboard_input() {
+            return;
+        }
+        const KEYS: [egui::Key; 6] = [
+            egui::Key::Num1,
+            egui::Key::Num2,
+            egui::Key::Num3,
+            egui::Key::Num4,
+            egui::Key::Num5,
+            egui::Key::Num6,
+        ];
+        for (index, key) in KEYS.into_iter().enumerate() {
+            let pressed = ctx.input(|input| input.modifiers.command && input.key_pressed(key));
+            if pressed {
+                if let Some(tab) = Tab::for_role(self.settings.role).get(index) {
+                    self.tab = *tab;
+                }
+            }
+        }
+    }
+
     /// Расписание выбранного преподавателя (считается из `raw_text`).
     pub(crate) fn rebuild_teacher_schedule(&mut self) {
         let Some(name) = self.selected_teacher.clone() else {
@@ -415,6 +532,25 @@ impl PulseApp {
                 parser::get_teacher_schedule(&self.raw_text, &name, &self.bells);
         }
         self.teacher_schedule_for = Some(name);
+    }
+
+    /// Выбирает группу для вкладки «Группы» (режим преподавателя).
+    pub(crate) fn set_group_view(&mut self, group: String) {
+        if self.group_view_group == group {
+            return;
+        }
+        self.group_view_group = group;
+        self.rebuild_group_view();
+    }
+
+    /// Пересобирает расписание просматриваемой группы из `raw_text`.
+    pub(crate) fn rebuild_group_view(&mut self) {
+        if self.group_view_group.trim().is_empty() || self.raw_text.trim().is_empty() {
+            self.group_view_schedule = ScheduleCache::new();
+            return;
+        }
+        self.group_view_schedule =
+            parser::parse_raw_text(&self.raw_text, &self.group_view_group, &self.bells);
     }
 
     /// Убирает выбранную группу и чистит кэш: чужие пары показывать нельзя.
@@ -536,6 +672,7 @@ impl PulseApp {
         self.save_settings();
 
         self.reparse();
+        self.rebuild_group_view();
 
         let days = self.schedule.len();
         let lessons: usize = self.schedule.values().map(|items| items.len()).sum();
@@ -712,6 +849,7 @@ impl PulseApp {
             self.set_status(StatusKind::Error, error);
         }
         self.reparse();
+        self.rebuild_group_view();
     }
 
     // ── отрисовка ────────────────────────────────────────────────────────────
@@ -725,35 +863,31 @@ impl PulseApp {
                     .strong()
                     .color(theme::color(self.settings.accent)),
             );
-            ui.label(egui::RichText::new("Pulse").size(14.0).color(theme::muted(self.settings.dark_theme)));
             ui.add_space(12.0);
 
-            let group_label = ui.label("Группа:");
-            if self.groups.is_empty() {
-                ui.label(egui::RichText::new("—").color(theme::muted(self.settings.dark_theme)));
-            } else {
-                let current = if self.active_group.is_empty() {
-                    "выбрать".to_string()
-                } else {
-                    self.active_group.clone()
+            // Роль переключается одним кликом: набор вкладок собирается сразу.
+            let mut role = self.settings.role;
+            for value in [Role::Student, Role::Teacher] {
+                let hint = match value {
+                    Role::Student => "Расписание группы, оценки и задания",
+                    Role::Teacher => "Своё расписание, группы и кафедра",
                 };
-                let mut chosen: Option<String> = None;
-                let combo = egui::ComboBox::from_id_salt("group-picker")
-                    .selected_text(current)
-                    .width(110.0)
-                    .show_ui(ui, |ui| {
-                        for group in &self.groups {
-                            let selected = group.eq_ignore_ascii_case(&self.active_group);
-                            if ui.selectable_label(selected, group).clicked() {
-                                chosen = Some(group.clone());
-                            }
-                        }
-                    });
-                // Список получает имя из подписи — иначе он нечитаем для скринридера.
-                combo.response.labelled_by(group_label.id);
-                if let Some(group) = chosen {
-                    self.set_active_group(group);
+                if ui
+                    .add(egui::Button::new(value.label()).selected(role == value))
+                    .on_hover_text(hint)
+                    .clicked()
+                {
+                    role = value;
                 }
+            }
+            if role != self.settings.role {
+                self.set_role(role);
+            }
+
+            ui.add_space(12.0);
+            match self.settings.role {
+                Role::Student => self.ui_group_picker(ui),
+                Role::Teacher => self.ui_teacher_picker(ui),
             }
 
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -768,6 +902,7 @@ impl PulseApp {
                         !busy,
                         egui::Button::new(label.as_str()).min_size(egui::vec2(120.0, 28.0)),
                     )
+                    .on_hover_text("Скачать свежий PDF с сайта колледжа и пересобрать расписание")
                     .clicked()
                 {
                     self.start_fetch();
@@ -787,20 +922,92 @@ impl PulseApp {
         });
     }
 
+    fn ui_group_picker(&mut self, ui: &mut egui::Ui) {
+        let label = ui.label("Группа:");
+        if self.groups.is_empty() {
+            ui.label(egui::RichText::new("—").color(theme::muted(self.settings.dark_theme)));
+            return;
+        }
+
+        let current = if self.active_group.is_empty() {
+            "выбрать".to_string()
+        } else {
+            self.active_group.clone()
+        };
+        let mut chosen: Option<String> = None;
+        let combo = egui::ComboBox::from_id_salt("group-picker")
+            .selected_text(current)
+            .width(110.0)
+            .show_ui(ui, |ui| {
+                for group in &self.groups {
+                    let selected = group.eq_ignore_ascii_case(&self.active_group);
+                    if ui.selectable_label(selected, group).clicked() {
+                        chosen = Some(group.clone());
+                    }
+                }
+            });
+        // Список получает имя из подписи — иначе он нечитаем для скринридера.
+        combo.response.labelled_by(label.id);
+        if let Some(group) = chosen {
+            self.set_active_group(group);
+        }
+    }
+
+    fn ui_teacher_picker(&mut self, ui: &mut egui::Ui) {
+        let label = ui.label("Я:");
+        if self.teachers.is_empty() {
+            ui.label(
+                egui::RichText::new("обновите расписание")
+                    .color(theme::muted(self.settings.dark_theme)),
+            );
+            return;
+        }
+
+        let current = if self.settings.teacher_name.trim().is_empty() {
+            "выбрать".to_string()
+        } else {
+            self.settings.teacher_name.clone()
+        };
+        let mut chosen: Option<String> = None;
+        let combo = egui::ComboBox::from_id_salt("self-teacher-picker")
+            .selected_text(current)
+            .width(190.0)
+            .show_ui(ui, |ui| {
+                for teacher in &self.teachers {
+                    let selected = teacher.name == self.settings.teacher_name;
+                    if ui.selectable_label(selected, &teacher.name).clicked() {
+                        chosen = Some(teacher.name.clone());
+                    }
+                }
+            });
+        combo.response.labelled_by(label.id);
+        if let Some(name) = chosen {
+            self.set_teacher_name(name);
+        }
+    }
+
     fn ui_nav(&mut self, ui: &mut egui::Ui) {
         ui.add_space(8.0);
-        for tab in Tab::ALL {
-            let selected = self.tab == tab;
+        let mut chosen: Option<Tab> = None;
+        for tab in Tab::for_role(self.settings.role) {
+            let selected = self.tab == *tab;
             // Иконку рисуем крупнее текста: монохромные эмодзи мельче букв.
+            let text = match self.nav_counter(*tab) {
+                Some(count) if count > 0 => format!("{} · {count}", tab.label()),
+                _ => tab.label().to_string(),
+            };
             let button = egui::Button::new((
                 egui::RichText::new(tab.icon()).size(16.0),
-                egui::RichText::new(tab.label()),
+                egui::RichText::new(text),
             ))
             .selected(selected)
             .min_size(egui::vec2(self.nav_width(), 34.0));
-            if ui.add(button).clicked() {
-                self.tab = tab;
+            if ui.add(button).on_hover_text(tab.hint()).clicked() {
+                chosen = Some(*tab);
             }
+        }
+        if let Some(tab) = chosen {
+            self.tab = tab;
         }
 
         ui.add_space(12.0);
@@ -808,33 +1015,56 @@ impl PulseApp {
         ui.add_space(8.0);
 
         let muted = theme::muted(self.settings.dark_theme);
-        let name = if self.settings.user_name.trim().is_empty() {
-            "Студент"
-        } else {
-            self.settings.user_name.trim()
+        let (name, subtitle) = match self.settings.role {
+            Role::Student => (
+                if self.settings.user_name.trim().is_empty() {
+                    "Студент".to_string()
+                } else {
+                    self.settings.user_name.trim().to_string()
+                },
+                (!self.settings.user_group.is_empty())
+                    .then(|| format!("гр. {}", self.settings.user_group)),
+            ),
+            Role::Teacher => (
+                if self.settings.teacher_name.trim().is_empty() {
+                    "Преподаватель".to_string()
+                } else {
+                    self.settings.teacher_name.trim().to_string()
+                },
+                Some("преподаватель".to_string()),
+            ),
         };
         ui.label(egui::RichText::new(name).strong());
-        if !self.settings.user_group.is_empty() {
-            ui.label(egui::RichText::new(format!("гр. {}", self.settings.user_group)).color(muted).size(12.0));
+        if let Some(subtitle) = subtitle {
+            ui.label(egui::RichText::new(subtitle).color(muted).size(12.0));
         }
 
         ui.add_space(10.0);
-        let lessons_today = self.lessons_on(self.today()).len();
+        let lessons_today = match self.settings.role {
+            Role::Student => self.lessons_on(self.today()).len(),
+            Role::Teacher => self
+                .teacher_schedule
+                .get(&self.today())
+                .map(Vec::len)
+                .unwrap_or(0),
+        };
         ui.label(
             egui::RichText::new(format!("Сегодня пар: {lessons_today}"))
                 .color(muted)
                 .size(12.0),
         );
-        let pending = self
-            .homework
-            .iter()
-            .filter(|item| !item.is_completed)
-            .count();
-        ui.label(
-            egui::RichText::new(format!("Активных заданий: {pending}"))
-                .color(muted)
-                .size(12.0),
-        );
+        if self.settings.role == Role::Student {
+            let pending = self
+                .homework
+                .iter()
+                .filter(|item| !item.is_completed)
+                .count();
+            ui.label(
+                egui::RichText::new(format!("Активных заданий: {pending}"))
+                    .color(muted)
+                    .size(12.0),
+            );
+        }
 
         ui.with_layout(egui::Layout::bottom_up(egui::Align::LEFT), |ui| {
             ui.add_space(6.0);
@@ -846,8 +1076,19 @@ impl PulseApp {
         });
     }
 
+    /// Число рядом с названием вкладки — чтобы важное было видно без перехода.
+    fn nav_counter(&self, tab: Tab) -> Option<usize> {
+        match tab {
+            Tab::Homework => Some(self.homework.iter().filter(|item| !item.is_completed).count()),
+            Tab::Notifications => Some(self.collect_notices().len()),
+            Tab::Teachers => Some(self.teachers.len()),
+            Tab::Groups => Some(self.groups.len()),
+            _ => None,
+        }
+    }
+
     fn nav_width(&self) -> f32 {
-        172.0
+        204.0
     }
 
     fn ui_status(&mut self, ui: &mut egui::Ui) {
@@ -1166,6 +1407,14 @@ impl PulseApp {
     pub(crate) fn draw(&mut self, ui: &mut egui::Ui) {
         let ctx = ui.ctx().clone();
         self.poll_fetch();
+        self.handle_shortcuts(&ctx);
+
+        // Роль могли сменить в другом окне или из старого файла настроек:
+        // держим вкладку в пределах доступных роли.
+        let tabs = Tab::for_role(self.settings.role);
+        if !tabs.contains(&self.tab) {
+            self.tab = tabs[0];
+        }
 
         if self.fetch.is_some() {
             ctx.request_repaint_after(Duration::from_millis(250));
@@ -1213,6 +1462,7 @@ impl PulseApp {
                     ui.add_space(6.0);
                     match self.tab {
                         Tab::Schedule => self.ui_schedule(ui),
+                        Tab::Groups => self.ui_groups(ui),
                         Tab::Teachers => self.ui_teachers(ui),
                         Tab::Performance => self.ui_performance(ui),
                         Tab::Homework => self.ui_homework(ui),
@@ -1429,8 +1679,10 @@ mod ui_tests {
         let (ctx, mut app) = test_app("data");
         fill_sample(&mut app);
 
-        for tab in Tab::ALL {
-            app.tab = tab;
+        // Вкладки студента.
+        app.settings.role = Role::Student;
+        for tab in Tab::for_role(Role::Student) {
+            app.tab = *tab;
             frame(&ctx, &mut app);
             frame(&ctx, &mut app);
         }
@@ -1445,6 +1697,31 @@ mod ui_tests {
         app.selected_date = today + Days::new(5);
         frame(&ctx, &mut app);
 
+        // Режим преподавателя: свои пары, группы, справочник и настройки.
+        app.settings.role = Role::Teacher;
+        app.settings.teacher_name = "Иванов И.И.".to_string();
+        app.selected_teacher = Some("Иванов И.И.".to_string());
+        app.teacher_schedule = app.schedule.clone();
+        app.group_view_group = "П-11".to_string();
+        app.group_view_schedule = app.schedule.clone();
+
+        for tab in Tab::for_role(Role::Teacher) {
+            app.tab = *tab;
+            frame(&ctx, &mut app);
+            frame(&ctx, &mut app);
+        }
+
+        // Недельные режимы: свои пары и расписание группы.
+        app.tab = Tab::Schedule;
+        app.teacher_week_mode = true;
+        frame(&ctx, &mut app);
+        app.teacher_week_mode = false;
+        app.tab = Tab::Groups;
+        app.week_mode = true;
+        frame(&ctx, &mut app);
+        app.week_mode = false;
+        app.settings.role = Role::Student;
+
         // Открытые окна и редактор звонков.
         let subject_dialog = SubjectDialog::from_grade(&app.semesters[0].grades[0]);
         app.subject_dialog = Some(subject_dialog);
@@ -1458,12 +1735,45 @@ mod ui_tests {
     }
 
     #[test]
+    fn teacher_role_switches_tabs_and_persists() {
+        let (ctx, mut app) = test_app("role");
+        fill_sample(&mut app);
+
+        app.set_role(Role::Teacher);
+        assert_eq!(app.settings.role, Role::Teacher);
+
+        // Набор вкладок у роли свой: оценок и заданий у преподавателя нет.
+        let tabs = Tab::for_role(Role::Teacher);
+        assert!(tabs.contains(&Tab::Groups));
+        assert!(!tabs.contains(&Tab::Performance));
+        assert!(!tabs.contains(&Tab::Homework));
+
+        // Имя подставляется из справочника — экран не остаётся пустым.
+        assert_eq!(app.settings.teacher_name, "Иванов И.И.");
+
+        // Недоступная роли вкладка откатывается к первой в кадре.
+        app.tab = Tab::Homework;
+        frame(&ctx, &mut app);
+        assert_eq!(app.tab, Tab::Schedule);
+
+        // Роль переживает перезапуск: она лежит в settings.json.
+        assert_eq!(app.store.load_settings().role, Role::Teacher);
+
+        app.set_role(Role::Student);
+        assert!(Tab::for_role(app.settings.role).contains(&Tab::Performance));
+        assert_eq!(app.store.load_settings().role, Role::Student);
+    }
+
+    #[test]
     fn empty_state_renders_for_every_tab() {
         let (ctx, mut app) = test_app("empty");
 
-        for tab in Tab::ALL {
-            app.tab = tab;
-            frame(&ctx, &mut app);
+        for role in [Role::Student, Role::Teacher] {
+            app.settings.role = role;
+            for tab in Tab::for_role(role) {
+                app.tab = *tab;
+                frame(&ctx, &mut app);
+            }
         }
 
         assert!(app.homework.is_empty());
@@ -1534,6 +1844,29 @@ mod shots {
                 ui_tests::fill_sample(app);
                 app.tab = tab;
                 app.settings.dark_theme = false;
+            });
+        }
+
+        // Режим преподавателя: своё расписание, группы, неделя.
+        for (tab, name, week) in [
+            (Tab::Schedule, "teacher-schedule", false),
+            (Tab::Schedule, "teacher-week", true),
+            (Tab::Groups, "teacher-groups", false),
+            (Tab::Groups, "teacher-groups-week", true),
+        ] {
+            render(&dir, name, 1280.0, 1000.0, move |app| {
+                ui_tests::fill_sample(app);
+                app.settings.role = Role::Teacher;
+                app.settings.teacher_name = "Иванов И.И.".to_string();
+                app.selected_teacher = Some("Иванов И.И.".to_string());
+                app.teacher_schedule = app.schedule.clone();
+                app.group_view_group = "П-11".to_string();
+                app.group_view_schedule = app.schedule.clone();
+                app.tab = tab;
+                match tab {
+                    Tab::Schedule => app.teacher_week_mode = week,
+                    _ => app.week_mode = week,
+                }
             });
         }
 

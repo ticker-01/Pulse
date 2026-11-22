@@ -1,7 +1,10 @@
-//! Десктопный клиент МГКАП (Pulse) для Windows, Linux и macOS.
+//! Десктопный клиент МГКАП для Windows, Linux и macOS.
 //!
 //! Ядро (разбор расписания, звонки, аналитика) живёт в крейте `pulse-core`
 //! и покрыто тестами; здесь — только интерфейс на `egui`/`eframe`.
+
+// В релизной сборке под Windows консольное окно не нужно; в debug оно полезно.
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod app;
 mod store;

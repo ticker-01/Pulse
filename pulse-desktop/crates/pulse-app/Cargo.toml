@@ -1,6 +1,6 @@
 [package]
 name = "pulse-app"
-description = "Десктопный клиент МГКАП (Pulse) для Windows, Linux и macOS"
+description = "Десктопный клиент МГКАП для Windows, Linux и macOS"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
