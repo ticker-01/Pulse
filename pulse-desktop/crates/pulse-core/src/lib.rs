@@ -25,7 +25,7 @@ pub use model::{now_lessons, LessonPair, ScheduleCache, Teacher};
 pub use performance::{Semester, SubjectGrade};
 pub use updater::{
     check_from_body, current_version, download_and_verify, fetch_and_check, os_label,
-    MacosAssets, PlatformAsset, UpdateInfo, UpdateManifest,
+    GitHubRelease, ReleaseAsset, UpdateInfo,
 };
 
 /// Адрес страницы с заменами в расписании колледжа.

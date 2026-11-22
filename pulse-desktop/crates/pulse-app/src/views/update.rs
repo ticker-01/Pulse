@@ -30,7 +30,7 @@ impl PulseApp {
 
     /// Немедленная проверка обновления (по кнопке или при старте).
     pub(crate) fn trigger_update_check(&mut self) {
-        let manifest_url = updater::MANIFEST_URL.to_string();
+        let manifest_url = updater::RELEASES_API_URL.to_string();
         let current = updater::current_version().to_string();
 
         // Блокировка на время проверки неприемлема; запускаем в потоке.
