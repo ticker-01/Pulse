@@ -15,6 +15,7 @@ use pulse_core::source::{self, FetchOutcome};
 
 use crate::store::{Role, Settings, Store};
 use crate::theme;
+use crate::views;
 
 /// Разделы бокового меню.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -247,6 +248,13 @@ pub(crate) struct PulseApp {
     pub(crate) tab: Tab,
     pub(crate) status: Option<StatusLine>,
 
+    /// Анимации включены в обычном запуске; тесты и скриншоты их выключают,
+    /// иначе кадр зависит от момента отрисовки.
+    pub(crate) animations: bool,
+    /// Когда (в секундах egui) сменилась вкладка и какая вкладка отрисована.
+    tab_switched_at: f64,
+    shown_tab: Tab,
+
     pub(crate) settings: Settings,
     pub(crate) bells: BellConfig,
     pub(crate) schedule: ScheduleCache,
@@ -269,6 +277,11 @@ pub(crate) struct PulseApp {
     pub(crate) teacher_schedule: ScheduleCache,
     pub(crate) teacher_schedule_for: Option<String>,
     pub(crate) teacher_week_mode: bool,
+
+    /// Расписание «себя» в режиме преподавателя: считается по `settings.teacher_name`
+    /// и не зависит от того, кого смотрят в справочнике.
+    pub(crate) my_schedule: ScheduleCache,
+    pub(crate) my_schedule_for: Option<String>,
 
     /// Вкладка «Группы»: какую группу смотрит преподаватель и её расписание.
     pub(crate) group_view_group: String,
@@ -328,6 +341,10 @@ impl PulseApp {
             store,
             tab: Tab::Schedule,
             status: None,
+            animations: true,
+            // Минус бесконечность: первый кадр сразу полностью видимый.
+            tab_switched_at: f64::NEG_INFINITY,
+            shown_tab: Tab::Schedule,
             settings,
             bells,
             schedule,
@@ -347,6 +364,8 @@ impl PulseApp {
             teacher_schedule: ScheduleCache::new(),
             teacher_schedule_for: None,
             teacher_week_mode: false,
+            my_schedule: ScheduleCache::new(),
+            my_schedule_for: None,
             group_view_group: String::new(),
             group_view_schedule: ScheduleCache::new(),
             group_view_date: today,
@@ -365,18 +384,18 @@ impl PulseApp {
         }
 
         // В режиме преподавателя сразу строим его расписание из сохранённого текста.
+        // Справочник живёт отдельным кэшем и «своё» расписание не трогает.
         if app.settings.role == Role::Teacher {
-            let saved = app.settings.teacher_name.trim().to_string();
-            if saved.is_empty() {
+            if app.settings.teacher_name.trim().is_empty() {
                 if let Some(first) = app.teachers.first().map(|teacher| teacher.name.clone()) {
                     app.set_teacher_name(first);
                 }
-            } else {
-                app.select_teacher(Some(saved));
             }
+            app.rebuild_my_schedule();
         }
 
-        if app.schedule.is_empty() && app.settings.auto_refresh {
+        // Расписание обновляем сами: при первом запуске и когда данные устарели.
+        if app.should_auto_fetch(Local::now().timestamp()) {
             app.start_fetch();
         }
 
@@ -479,19 +498,35 @@ impl PulseApp {
                     self.settings.teacher_name = first.name.clone();
                 }
             }
-            let name = self.settings.teacher_name.trim().to_string();
-            if !name.is_empty() {
-                self.select_teacher(Some(name));
-            }
+            self.rebuild_my_schedule();
         }
         self.save_settings();
     }
 
     /// Выбирает «себя» в режиме преподавателя.
     pub(crate) fn set_teacher_name(&mut self, name: String) {
-        self.settings.teacher_name = name.clone();
+        self.settings.teacher_name = name;
         self.save_settings();
-        self.select_teacher(Some(name));
+        self.rebuild_my_schedule();
+    }
+
+    /// Собирает расписание «себя» из `raw_text` по имени в настройках.
+    ///
+    /// Отдельный кэш нужен потому, что вкладка «Преподаватели» показывает
+    /// чужое расписание: раньше оба вида жили в одном поле, и просмотр любого
+    /// преподавателя подменял «Моё расписание».
+    pub(crate) fn rebuild_my_schedule(&mut self) {
+        let name = self.settings.teacher_name.trim().to_string();
+        self.my_schedule_for = if name.is_empty() {
+            None
+        } else {
+            Some(name.clone())
+        };
+        if name.is_empty() || self.raw_text.trim().is_empty() {
+            self.my_schedule = ScheduleCache::new();
+            return;
+        }
+        self.my_schedule = parser::get_teacher_schedule(&self.raw_text, &name, &self.bells);
     }
 
     /// Ctrl+1…N — переход по вкладкам текущей роли.
@@ -564,9 +599,41 @@ impl PulseApp {
         self.save_settings();
     }
 
+    /// Как часто обновлять расписание само, если включено автообновление.
+    pub(crate) const AUTO_REFRESH_INTERVAL_SECS: i64 = 6 * 60 * 60;
+
+    /// Скачивать ли расписание при запуске: пустой кэш или устаревшие данные.
+    pub(crate) fn should_auto_fetch(&self, now_ts: i64) -> bool {
+        if !self.settings.auto_refresh {
+            return false;
+        }
+        // Текста нет вовсе — без загрузки показывать нечего.
+        if self.raw_text.trim().is_empty() {
+            return true;
+        }
+        let last = self.settings.last_fetch_at;
+        last <= 0 || now_ts.saturating_sub(last) >= Self::AUTO_REFRESH_INTERVAL_SECS
+    }
+
+    /// Сколько длится проявление содержимого после смены вкладки, в секундах.
+    pub(crate) const TAB_FADE_SECS: f64 = 0.18;
+
+    /// Непрозрачность содержимого вкладки: 0 сразу после переключения,
+    /// 1 — через [`Self::TAB_FADE_SECS`]. Без анимаций всегда 1.
+    pub(crate) fn tab_fade(&self, now_time: f64) -> f32 {
+        if !self.animations {
+            return 1.0;
+        }
+        let progress =
+            ((now_time - self.tab_switched_at) / Self::TAB_FADE_SECS).clamp(0.0, 1.0) as f32;
+        // ease-out: проявление быстрое, конец мягкий.
+        1.0 - (1.0 - progress).powi(3)
+    }
+
     /// Пересобирает кэш расписания активной группы из `raw_text`.
     pub(crate) fn reparse(&mut self) {
         if self.active_group.trim().is_empty() || self.raw_text.trim().is_empty() {
+            self.rebuild_my_schedule();
             return;
         }
         let parsed = parser::parse_raw_text(&self.raw_text, &self.active_group, &self.bells);
@@ -586,6 +653,7 @@ impl PulseApp {
         if self.selected_teacher.is_some() {
             self.rebuild_teacher_schedule();
         }
+        self.rebuild_my_schedule();
         if self.schedule.is_empty() {
             let message = if self.active_group.is_empty() {
                 "Группа не выбрана: укажите её в настройках или нажмите «Обновить».".to_string()
@@ -669,6 +737,9 @@ impl PulseApp {
         if let Some(error) = self.store.save_teachers(&self.teachers) {
             self.set_status(StatusKind::Error, error);
         }
+        // Время загрузки нужно, чтобы при следующем запуске понять,
+        // устарело ли расписание.
+        self.settings.last_fetch_at = Local::now().timestamp();
         self.save_settings();
 
         self.reparse();
@@ -1043,7 +1114,7 @@ impl PulseApp {
         let lessons_today = match self.settings.role {
             Role::Student => self.lessons_on(self.today()).len(),
             Role::Teacher => self
-                .teacher_schedule
+                .my_schedule
                 .get(&self.today())
                 .map(Vec::len)
                 .unwrap_or(0),
@@ -1102,7 +1173,27 @@ impl PulseApp {
                         StatusKind::Success => theme::color(pulse_core::performance::COLOR_EXCELLENT),
                         StatusKind::Error => theme::color(pulse_core::performance::COLOR_FAIL),
                     };
-                    ui.label(egui::RichText::new(&status.text).color(color).size(12.0));
+                    // Проявляем 0.25 с и гаснем в последние 0.8 с из 12 —
+                    // строка появляется и уходит мягко, а не рывком.
+                    let alpha = if views::animations_on(ui.ctx()) {
+                        let age = status.shown_at.elapsed().as_secs_f32();
+                        let mut alpha = (age / 0.25).clamp(0.0, 1.0);
+                        if status.kind != StatusKind::Error {
+                            alpha = alpha.min(((12.0 - age) / 0.8).clamp(0.0, 1.0));
+                        }
+                        if alpha < 1.0 {
+                            ui.ctx()
+                                .request_repaint_after(Duration::from_millis(33));
+                        }
+                        alpha
+                    } else {
+                        1.0
+                    };
+                    ui.label(
+                        egui::RichText::new(&status.text)
+                            .color(color.gamma_multiply(alpha))
+                            .size(12.0),
+                    );
                 }
                 None => {
                     ui.label(
@@ -1408,6 +1499,7 @@ impl PulseApp {
     /// было отрисовать без окна — это делают тесты в конце файла.
     pub(crate) fn draw(&mut self, ui: &mut egui::Ui) {
         let ctx = ui.ctx().clone();
+        views::set_animations(&ctx, self.animations);
         self.poll_fetch();
         self.handle_shortcuts(&ctx);
 
@@ -1416,6 +1508,18 @@ impl PulseApp {
         let tabs = Tab::for_role(self.settings.role);
         if !tabs.contains(&self.tab) {
             self.tab = tabs[0];
+        }
+
+        // ── переход между вкладками ──────────────────────────────────────────
+        // Считаем по времени egui, а не по `Instant`: тесты задают своё время.
+        let now_time = ctx.input(|input| input.time);
+        if self.shown_tab != self.tab {
+            self.shown_tab = self.tab;
+            self.tab_switched_at = now_time;
+        }
+        let fade = self.tab_fade(now_time);
+        if fade < 1.0 {
+            ctx.request_repaint();
         }
 
         if self.fetch.is_some() {
@@ -1458,6 +1562,9 @@ impl PulseApp {
             });
 
         egui::CentralPanel::default().show(ui, |ui| {
+            if fade < 1.0 {
+                ui.multiply_opacity(fade);
+            }
             egui::ScrollArea::vertical()
                 .auto_shrink([false, false])
                 .show(ui, |ui| {
@@ -1511,7 +1618,10 @@ mod ui_tests {
         // Нет глифа — паникуем: «квадратик» на скриншоте легко пропустить.
         ctx.set_missing_glyph_policy(egui::MissingGlyphPolicy::Panic);
         let cc = eframe::CreationContext::_new_kittest(ctx.clone());
-        let app = PulseApp::with_store(&cc, temp_store(tag), None);
+        let mut app = PulseApp::with_store(&cc, temp_store(tag), None);
+        // Анимации зависят от времени кадра: в тестах они выключены,
+        // иначе проверки вёрстки «плавали» бы от момента запуска.
+        app.animations = false;
         (ctx, app)
     }
 
@@ -1574,6 +1684,8 @@ mod ui_tests {
         ];
         app.selected_teacher = Some("Иванов И.И.".to_string());
         app.teacher_schedule = app.schedule.clone();
+        app.my_schedule = app.schedule.clone();
+        app.my_schedule_for = Some("Иванов И.И.".to_string());
 
         let mut overdue = HomeworkItem::new("Физика", "Отчёт по лабораторной", today);
         overdue.due_date = today - Days::new(2);
@@ -1739,6 +1851,8 @@ mod ui_tests {
         app.settings.teacher_name = "Иванов И.И.".to_string();
         app.selected_teacher = Some("Иванов И.И.".to_string());
         app.teacher_schedule = app.schedule.clone();
+        app.my_schedule = app.schedule.clone();
+        app.my_schedule_for = Some("Иванов И.И.".to_string());
         app.group_view_group = "П-11".to_string();
         app.group_view_schedule = app.schedule.clone();
 
@@ -1799,6 +1913,122 @@ mod ui_tests {
         app.set_role(Role::Student);
         assert!(Tab::for_role(app.settings.role).contains(&Tab::Performance));
         assert_eq!(app.store.load_settings().role, Role::Student);
+    }
+
+    /// Текст с тремя преподавателями: у каждого своя пара в один день.
+    fn raw_text_for_teachers(day: NaiveDate) -> String {
+        format!(
+            "РАСПИСАНИЕ НА {}\n\
+             УТВЕРЖДАЮ Директор\n\n\
+             No гр. Предмет Преподаватель\n\n\
+             │21э│1│Математика│201│Иванов И.И.│\n\
+             │21э│2│Физика│202│Петрова А.С.│\n\
+             │22э│1│Химия│301│Козлов К.К.│\n",
+            day.format("%d.%m.%Y")
+        )
+    }
+
+    /// Предметы первого дня из кэша — так тест видит, чьё расписание показано.
+    fn subjects_of(cache: &pulse_core::model::ScheduleCache, day: NaiveDate) -> Vec<String> {
+        cache
+            .get(&day)
+            .map(|lessons| {
+                lessons
+                    .iter()
+                    .map(|lesson| lesson.subject.clone())
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    #[test]
+    fn directory_selection_does_not_touch_my_schedule() {
+        // Регрессия: выбор любого преподавателя в справочнике подменял пары
+        // в «Моём расписании» — оба вида читали один и тот же кэш.
+        let (ctx, mut app) = test_app("teacher-bug");
+        let today = app.today();
+        app.raw_text = raw_text_for_teachers(today);
+        app.groups = vec!["21э".to_string()];
+        app.active_group = "21э".to_string();
+        app.teachers = parser::extract_teachers(&app.raw_text, &[]);
+        app.settings.role = Role::Teacher;
+        app.set_teacher_name("Иванов И.И.".to_string());
+
+        assert_eq!(subjects_of(&app.my_schedule, today), vec!["Математика"]);
+
+        // Клик по чужому преподавателю в справочнике.
+        app.select_teacher(Some("Петрова А.С.".to_string()));
+        frame(&ctx, &mut app);
+
+        assert_eq!(app.selected_teacher.as_deref(), Some("Петрова А.С."));
+        assert_eq!(
+            subjects_of(&app.teacher_schedule, today),
+            vec!["Физика"],
+            "справочник должен показывать пары выбранного преподавателя"
+        );
+        assert_eq!(
+            subjects_of(&app.my_schedule, today),
+            vec!["Математика"],
+            "«Моё расписание» не должно зависеть от справочника"
+        );
+
+        // Смена «себя» в настройках пересобирает именно своё расписание.
+        app.set_teacher_name("Козлов К.К.".to_string());
+        assert_eq!(subjects_of(&app.my_schedule, today), vec!["Химия"]);
+    }
+
+    #[test]
+    fn tab_switch_fades_in() {
+        let (ctx, mut app) = test_app("fade");
+        // В тестах анимации выключены: кадр сразу полный.
+        assert_eq!(app.tab_fade(0.0), 1.0);
+
+        app.animations = true;
+        app.tab = Tab::Performance;
+        // Первый кадр фиксирует момент переключения.
+        frame(&ctx, &mut app);
+        assert_eq!(app.shown_tab, Tab::Performance);
+
+        let switched_at = app.tab_switched_at;
+        assert_eq!(app.tab_fade(switched_at), 0.0, "сразу после переключения ещё пусто");
+        let middle = app.tab_fade(switched_at + PulseApp::TAB_FADE_SECS / 2.0);
+        assert!(
+            middle > 0.5 && middle < 1.0,
+            "середина перехода должна быть плавной, а не скачком: {middle}"
+        );
+        assert_eq!(app.tab_fade(switched_at + PulseApp::TAB_FADE_SECS), 1.0);
+        assert_eq!(app.tab_fade(switched_at + 3_600.0), 1.0, "старая метка не гасит экран");
+
+        // Смена вкладки заново запускает проявление.
+        app.tab = Tab::Homework;
+        frame(&ctx, &mut app);
+        assert_eq!(app.tab_fade(app.tab_switched_at), 0.0);
+    }
+
+    #[test]
+    fn auto_fetch_only_when_data_is_stale() {
+        let (_ctx, mut app) = test_app("auto-fetch");
+
+        // Автообновление выключено пользователем — не ходим в сеть никогда.
+        app.settings.auto_refresh = false;
+        app.settings.last_fetch_at = 0;
+        app.raw_text.clear();
+        assert!(!app.should_auto_fetch(1_000));
+
+        // Включено и текста нет вовсе — качаем сразу.
+        app.settings.auto_refresh = true;
+        assert!(app.should_auto_fetch(1_000));
+
+        // Текст есть, но время загрузки неизвестно — тоже качаем.
+        app.raw_text = raw_text_for_teachers(app.today());
+        assert!(app.should_auto_fetch(1_000));
+
+        // Свежие данные не трогаем: до истечения интервала запросов нет.
+        app.settings.last_fetch_at = 1_000;
+        assert!(!app.should_auto_fetch(1_060));
+        assert!(!app.should_auto_fetch(1_000 + PulseApp::AUTO_REFRESH_INTERVAL_SECS - 1));
+        // Ровно интервал выдержан — обновляем.
+        assert!(app.should_auto_fetch(1_000 + PulseApp::AUTO_REFRESH_INTERVAL_SECS));
     }
 
     #[test]
@@ -1897,6 +2127,8 @@ mod shots {
                 app.settings.teacher_name = "Иванов И.И.".to_string();
                 app.selected_teacher = Some("Иванов И.И.".to_string());
                 app.teacher_schedule = app.schedule.clone();
+                app.my_schedule = app.schedule.clone();
+                app.my_schedule_for = Some("Иванов И.И.".to_string());
                 app.group_view_group = "П-11".to_string();
                 app.group_view_schedule = app.schedule.clone();
                 app.tab = tab;
@@ -1942,6 +2174,8 @@ mod shots {
             .wgpu()
             .build_eframe(move |cc| {
                 let mut app = PulseApp::with_store(cc, store, None);
+                // Кадр должен быть «успокоившимся»: без переходов и пульсации.
+                app.animations = false;
                 setup(&mut app);
                 app
             });

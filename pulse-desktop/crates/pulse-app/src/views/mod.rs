@@ -72,17 +72,52 @@ pub(crate) fn muted(ui: &mut egui::Ui, text: impl Into<String>) -> egui::Respons
 
 /// Подпись-«таблетка» с полупрозрачной подложкой.
 pub(crate) fn badge(ui: &mut egui::Ui, text: &str, color: egui::Color32) {
+    badge_with_fill(ui, text, color, 0.18);
+}
+
+fn badge_with_fill(ui: &mut egui::Ui, text: &str, color: egui::Color32, fill: f32) {
     let font = egui::FontId::proportional(12.0);
     let padding = egui::vec2(8.0, 3.0);
     let galley = ui.painter().layout_no_wrap(text.to_owned(), font, color);
     let size = galley.size() + padding * 2.0;
     let (rect, _) = ui.allocate_exact_size(size, egui::Sense::hover());
-    ui.painter().rect_filled(
-        rect,
-        egui::CornerRadius::same(8),
-        color.gamma_multiply(0.18),
-    );
+    ui.painter()
+        .rect_filled(rect, egui::CornerRadius::same(8), color.gamma_multiply(fill));
     ui.painter().galley(rect.min + padding, galley, color);
+}
+
+/// Бейдж «сейчас»: подложка мягко дышит, чтобы идущую пару было видно
+/// с одного взгляда, но текст не мигал.
+pub(crate) fn pulse_badge(ui: &mut egui::Ui, text: &str, color: egui::Color32) {
+    if !animations_on(ui.ctx()) {
+        badge(ui, text, color);
+        return;
+    }
+    let time = ui.ctx().input(|input| input.time) as f32;
+    // Период 1.8 с — заметно, но не отвлекает.
+    let phase = (time * std::f32::consts::TAU / 1.8).sin() * 0.5 + 0.5;
+    badge_with_fill(ui, text, color, 0.12 + 0.20 * phase);
+    ui.ctx()
+        .request_repaint_after(std::time::Duration::from_millis(33));
+}
+
+/// Ключ флага анимаций в `Context`.
+///
+/// Флаг живёт в контексте, а не в `PulseApp`, потому что бейджи и полоски
+/// рисуются свободными функциями, куда `self` не передаётся.
+const ANIMATIONS_KEY: &str = "pulse-animations";
+
+/// Включает или выключает анимации на этот кадр.
+pub(crate) fn set_animations(ctx: &egui::Context, on: bool) {
+    ctx.data_mut(|data| data.insert_temp(egui::Id::unique(ANIMATIONS_KEY), on));
+}
+
+/// Включены ли анимации; по умолчанию — да.
+pub(crate) fn animations_on(ctx: &egui::Context) -> bool {
+    ctx.data(|data| {
+        data.get_temp::<bool>(egui::Id::unique(ANIMATIONS_KEY))
+            .unwrap_or(true)
+    })
 }
 
 /// Заглушка «данных пока нет» с подсказкой, что делать.
@@ -186,13 +221,22 @@ pub(crate) fn bar_width(
     height: f32,
 ) {
     let width = width.max(20.0);
+    // Заполнение подкручивается плавно: первый вызов возвращает само значение,
+    // поэтому полоска сразу нужной длины — скачков при открытии вкладки нет.
+    let target = ratio.clamp(0.0, 1.0);
+    let shown = if animations_on(ui.ctx()) {
+        ui.ctx()
+            .animate_value_with_time(ui.next_auto_id(), target, 0.35)
+    } else {
+        target
+    };
     let (rect, _) = ui.allocate_exact_size(egui::vec2(width, height), egui::Sense::hover());
     let radius = egui::CornerRadius::same((height / 2.0) as u8);
     ui.painter()
         .rect_filled(rect, radius, border_color(ui).gamma_multiply(0.5));
     let filled = egui::Rect::from_min_size(
         rect.min,
-        egui::vec2(width * ratio.clamp(0.0, 1.0), height),
+        egui::vec2(width * shown, height),
     );
     ui.painter().rect_filled(filled, radius, color);
 }

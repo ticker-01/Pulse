@@ -258,9 +258,12 @@ impl PulseApp {
             dirty |= ui
                 .checkbox(
                     &mut self.settings.auto_refresh,
-                    "Загружать расписание при запуске, если данных ещё нет",
+                    "Обновлять само: при первом запуске и если данным больше 6 часов",
                 )
                 .changed();
+
+            ui.add_space(2.0);
+            muted(ui, format!("Последнее обновление: {}", last_fetch_label(self.settings.last_fetch_at)));
 
             ui.horizontal(|ui| {
                 let busy = self.fetch.is_some();
@@ -544,6 +547,8 @@ impl PulseApp {
         self.teacher_schedule = ScheduleCache::new();
         self.teacher_schedule_for = None;
         self.teacher_week_mode = false;
+        self.my_schedule = ScheduleCache::new();
+        self.my_schedule_for = None;
         self.group_view_group.clear();
         self.group_view_schedule = ScheduleCache::new();
         self.group_view_date = self.today();
@@ -564,5 +569,19 @@ impl PulseApp {
             StatusKind::Success,
             "Все данные удалены. Настройки сброшены к значениям по умолчанию.",
         );
+    }
+}
+
+/// «22.11.2026, 15:40» или «ещё не обновлялось».
+fn last_fetch_label(timestamp: i64) -> String {
+    if timestamp <= 0 {
+        return "ещё не обновлялось".to_string();
+    }
+    match chrono::DateTime::from_timestamp(timestamp, 0) {
+        Some(utc) => utc
+            .with_timezone(&chrono::Local)
+            .format("%d.%m.%Y, %H:%M")
+            .to_string(),
+        None => "ещё не обновлялось".to_string(),
     }
 }

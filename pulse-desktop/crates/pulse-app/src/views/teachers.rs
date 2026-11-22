@@ -6,12 +6,23 @@
 use chrono::{Datelike, NaiveDate, NaiveTime};
 use eframe::egui;
 use pulse_core::datetime;
-use pulse_core::model::{LessonPair, Teacher};
+use pulse_core::model::{LessonPair, ScheduleCache, Teacher};
 
 use crate::app::PulseApp;
 use crate::theme;
 use crate::views::schedule::shift_days;
-use crate::views::{avatar, badge, card, dark, empty_state, muted, muted_color, subject_visual};
+use crate::views::{
+    avatar, badge, card, dark, empty_state, muted, muted_color, pulse_badge, subject_visual,
+};
+
+/// Чей кэш показывает панель преподавателя.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Source {
+    /// «Моё расписание»: кэш построен по имени из настроек.
+    Mine,
+    /// Справочник: кэш построен по выбранному в списке преподавателю.
+    Picked,
+}
 
 impl PulseApp {
     pub(crate) fn ui_teachers(&mut self, ui: &mut egui::Ui) {
@@ -128,7 +139,7 @@ impl PulseApp {
             ui.separator();
 
             ui.vertical(|ui| match self.selected_teacher.clone() {
-                Some(name) => self.teacher_panel(ui, &name, true),
+                Some(name) => self.teacher_panel(ui, &name, true, Source::Picked),
                 None => {
                     empty_state(
                         ui,
@@ -190,7 +201,7 @@ impl PulseApp {
         if self.teacher_week_mode {
             self.teacher_week(ui);
         } else {
-            self.teacher_panel(ui, &name, false);
+            self.teacher_panel(ui, &name, false, Source::Mine);
         }
     }
 
@@ -225,7 +236,7 @@ impl PulseApp {
 
         for date in days {
             let lessons = self
-                .teacher_schedule
+                .my_schedule
                 .get(&date)
                 .cloned()
                 .unwrap_or_default();
@@ -280,8 +291,9 @@ impl PulseApp {
     /// Карточка преподавателя и его расписание на день.
     ///
     /// `allow_reset` включает кнопку «сбросить выбор» — она нужна только
-    /// в справочнике, где выбор делает пользователь.
-    fn teacher_panel(&mut self, ui: &mut egui::Ui, name: &str, allow_reset: bool) {
+    /// в справочнике, где выбор делает пользователь. `source` говорит, чей
+    /// кэш читать: в справочнике — чужой, на вкладке «Расписание» — свой.
+    fn teacher_panel(&mut self, ui: &mut egui::Ui, name: &str, allow_reset: bool, source: Source) {
         let today = self.today();
         let now = self.now();
         let mut date_shift: i64 = 0;
@@ -352,21 +364,25 @@ impl PulseApp {
         ui.add_space(6.0);
 
         let date: NaiveDate = self.teacher_date;
-        let lessons = self
-            .teacher_schedule
-            .get(&date)
-            .cloned()
-            .unwrap_or_default();
-
-        if lessons.is_empty() {
-            muted(ui, "В этот день пар нет.");
-            let upcoming: Vec<(NaiveDate, usize)> = self
-                .teacher_schedule
+        // Кэш выбираем один раз: дальше `self` меняется, держать ссылку нельзя.
+        let cache: &ScheduleCache = match source {
+            Source::Mine => &self.my_schedule,
+            Source::Picked => &self.teacher_schedule,
+        };
+        let lessons = cache.get(&date).cloned().unwrap_or_default();
+        let upcoming: Vec<(NaiveDate, usize)> = if lessons.is_empty() {
+            cache
                 .iter()
                 .filter(|(day, items)| **day >= date && !items.is_empty())
                 .map(|(day, items)| (*day, items.len()))
                 .take(3)
-                .collect();
+                .collect()
+        } else {
+            Vec::new()
+        };
+
+        if lessons.is_empty() {
+            muted(ui, "В этот день пар нет.");
             if !upcoming.is_empty() {
                 ui.add_space(4.0);
                 muted(ui, "Ближайшие занятия:");
@@ -434,7 +450,7 @@ fn teacher_lesson_row(ui: &mut egui::Ui, lesson: &LessonPair, is_today: bool, no
                         .color(color),
                 );
                 if active {
-                    badge(ui, "сейчас", color);
+                    pulse_badge(ui, "сейчас", color);
                 }
             });
             let mut info = format!("ауд. {}", lesson.room);

@@ -9,7 +9,7 @@ use crate::app::PulseApp;
 use crate::store::Role;
 use crate::theme;
 use crate::views::{
-    badge, card, dark, empty_state, muted, muted_color, subject_visual,
+    badge, card, dark, empty_state, muted, muted_color, pulse_badge, subject_visual,
 };
 
 impl PulseApp {
@@ -319,7 +319,7 @@ fn lesson_card(
                                 .color(color),
                         );
                         if active {
-                            badge(ui, "сейчас", color);
+                            pulse_badge(ui, "сейчас", color);
                         }
                     });
                     let mut info = format!("{} · ауд. {}", lesson.teacher, lesson.room);

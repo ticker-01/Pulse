@@ -49,6 +49,8 @@ pub struct Settings {
     pub role: Role,
     /// Имя преподавателя для режима преподавателя (как в справочнике).
     pub teacher_name: String,
+    /// Когда расписание последний раз скачивалось с сайта (Unix-время, 0 — ни разу).
+    pub last_fetch_at: i64,
 }
 
 impl Default for Settings {
@@ -64,6 +66,7 @@ impl Default for Settings {
             last_pdf_file: String::new(),
             role: Role::Student,
             teacher_name: String::new(),
+            last_fetch_at: 0,
         }
     }
 }
