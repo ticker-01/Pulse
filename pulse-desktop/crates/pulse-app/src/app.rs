@@ -2089,7 +2089,10 @@ mod ui_tests {
             ..Default::default()
         };
         let output = ctx.run_ui(input, |ui| app.draw(ui));
-        let primitives = ctx.tessellate(output.shapes, output.pixels_per_point);
+        let shapes = output.shapes.clone();
+        let pixels_per_point = output.pixels_per_point;
+        output.drop_without_applying_deltas();
+        let primitives = ctx.tessellate(shapes, pixels_per_point);
         let mut peak = 0u8;
         for primitive in primitives {
             let egui::epaint::Primitive::Mesh(mesh) = primitive.primitive else {

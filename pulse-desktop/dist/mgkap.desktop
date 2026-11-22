@@ -1,0 +1,7 @@
+[Desktop Entry]
+Type=Application
+Name=МГКАП
+Comment=Расписание колледжа, звонки и успеваемость
+Exec=mgkap
+Terminal=false
+Categories=Education;
