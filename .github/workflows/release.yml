@@ -25,7 +25,7 @@ jobs:
     name: Тесты и clippy
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy
@@ -44,7 +44,7 @@ jobs:
     needs: test
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
         with:
@@ -69,7 +69,7 @@ jobs:
           tar -czf mgkap-linux-x86_64.tar.gz -C dist .
           ls -lh mgkap-linux-x86_64.tar.gz
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: mgkap-linux-x86_64
           path: pulse-desktop/mgkap-linux-x86_64.tar.gz
@@ -80,7 +80,7 @@ jobs:
     needs: test
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
         with:
@@ -96,94 +96,91 @@ jobs:
           Copy-Item target/release/pulse-app.exe dist/mgkap.exe
           Get-Item dist/mgkap.exe | Format-List Name,Length
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: mgkap-windows-x86_64
           path: pulse-desktop/dist/mgkap.exe
           if-no-files-found: error
 
   macos:
-    name: macOS ${{ matrix.arch }}
+    name: macOS
     needs: test
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          # Оба таргета собираются на Apple Silicon: Rust кросс-компилирует
-          # x86_64 без дополнительного SDK, а Intel-раннеры GitHub снимают с учёта.
-          - runner: macos-14
-            target: x86_64-apple-darwin
-            arch: x86_64
-          - runner: macos-14
-            target: aarch64-apple-darwin
-            arch: aarch64
-    runs-on: ${{ matrix.runner }}
+    # macos-14 снят с учёта 02.11.2026, актуальны macos-latest (26) и macos-15.
+    # Оба таргета собираются на одном Apple Silicon раннере: Rust кросс-компилирует
+    # x86_64 на arm64 без отдельного SDK, а минуты macOS самые дорогие.
+    runs-on: macos-15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
         with:
-          targets: ${{ matrix.target }}
+          targets: x86_64-apple-darwin,aarch64-apple-darwin
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: pulse-desktop
 
-      - name: Собрать
-        run: cargo build --release -p pulse-app --target ${{ matrix.target }}
+      - name: Собрать обе архитектуры
+        run: |
+          set -euo pipefail
+          for target in x86_64-apple-darwin aarch64-apple-darwin; do
+            cargo build --release -p pulse-app --target "$target"
+          done
 
       - name: Собрать .app и .dmg
         env:
           APP_NAME: "МГКАП"
           APP_EXE: pulse-app
           BUNDLE_ID: by.mgkap.desktop
-          TARGET: ${{ matrix.target }}
-          ARCH: ${{ matrix.arch }}
         run: |
           set -euo pipefail
           VERSION=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
           echo "версия $VERSION"
 
-          APP="dist/$APP_NAME.app"
-          rm -rf dist
-          mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
+          # Один и тот же .app собирается дважды — под каждую архитектуру.
+          for arch in aarch64 x86_64; do
+            TARGET="$arch-apple-darwin"
+            APP="dist/$APP_NAME.app"
+            rm -rf dist
+            mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 
-          cp "target/$TARGET/release/$APP_EXE" "$APP/Contents/MacOS/$APP_EXE"
-          chmod +x "$APP/Contents/MacOS/$APP_EXE"
+            cp "target/$TARGET/release/$APP_EXE" "$APP/Contents/MacOS/$APP_EXE"
+            chmod +x "$APP/Contents/MacOS/$APP_EXE"
 
-          printf '%s\n' \
-            '<?xml version="1.0" encoding="UTF-8"?>' \
-            '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">' \
-            '<plist version="1.0">' \
-            '<dict>' \
-            "  <key>CFBundleName</key><string>$APP_NAME</string>" \
-            "  <key>CFBundleDisplayName</key><string>$APP_NAME</string>" \
-            "  <key>CFBundleExecutable</key><string>$APP_EXE</string>" \
-            "  <key>CFBundleIdentifier</key><string>$BUNDLE_ID</string>" \
-            '  <key>CFBundlePackageType</key><string>APPL</string>' \
-            "  <key>CFBundleShortVersionString</key><string>$VERSION</string>" \
-            "  <key>CFBundleVersion</key><string>$VERSION</string>" \
-            '  <key>LSMinimumSystemVersion</key><string>11.0</string>' \
-            '  <key>NSHighResolutionCapable</key><true/>' \
-            '  <key>NSSupportsAutomaticGraphicsSwitching</key><true/>' \
-            '</dict>' \
-            '</plist>' > "$APP/Contents/Info.plist"
+            printf '%s\n' \
+              '<?xml version="1.0" encoding="UTF-8"?>' \
+              '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">' \
+              '<plist version="1.0">' \
+              '<dict>' \
+              "  <key>CFBundleName</key><string>$APP_NAME</string>" \
+              "  <key>CFBundleDisplayName</key><string>$APP_NAME</string>" \
+              "  <key>CFBundleExecutable</key><string>$APP_EXE</string>" \
+              "  <key>CFBundleIdentifier</key><string>$BUNDLE_ID</string>" \
+              '  <key>CFBundlePackageType</key><string>APPL</string>' \
+              "  <key>CFBundleShortVersionString</key><string>$VERSION</string>" \
+              "  <key>CFBundleVersion</key><string>$VERSION</string>" \
+              '  <key>LSMinimumSystemVersion</key><string>11.0</string>' \
+              '  <key>NSHighResolutionCapable</key><true/>' \
+              '  <key>NSSupportsAutomaticGraphicsSwitching</key><true/>' \
+              '</dict>' \
+              '</plist>' > "$APP/Contents/Info.plist"
 
-          plutil -lint "$APP/Contents/Info.plist"
+            plutil -lint "$APP/Contents/Info.plist"
 
-          # Подпись ad-hoc: сертификат Apple не нужен, но на Apple Silicon
-          # неподписанный бинарник не запускается вовсе.
-          codesign --force --deep --sign - "$APP"
-          codesign --verify --deep --strict "$APP"
-          echo "подпись ok"
+            # Подпись ad-hoc: сертификат Apple не нужен, но на Apple Silicon
+            # неподписанный бинарник не запускается вовсе.
+            codesign --force --deep --sign - "$APP"
+            codesign --verify --deep --strict "$APP"
 
-          OUT="mgkap-macos-$ARCH"
-          ditto -c -k --sequesterRsrc --keepParent "$APP" "$OUT.zip"
-          hdiutil create -volname "$APP_NAME" -srcfolder "$APP" -ov -format UDZO "$OUT.dmg"
-          ls -lh "$OUT.zip" "$OUT.dmg"
+            OUT="mgkap-macos-$arch"
+            ditto -c -k --sequesterRsrc --keepParent "$APP" "$OUT.zip"
+            hdiutil create -volname "$APP_NAME" -srcfolder "$APP" -ov -format UDZO "$OUT.dmg"
+            file "target/$TARGET/release/$APP_EXE"
+            ls -lh "$OUT.zip" "$OUT.dmg"
+          done
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
-          name: mgkap-macos-${{ matrix.arch }}
+          name: mgkap-macos
           path: |
-            pulse-desktop/mgkap-macos-${{ matrix.arch }}.zip
-            pulse-desktop/mgkap-macos-${{ matrix.arch }}.dmg
+            pulse-desktop/mgkap-macos-*.zip
+            pulse-desktop/mgkap-macos-*.dmg
           if-no-files-found: error

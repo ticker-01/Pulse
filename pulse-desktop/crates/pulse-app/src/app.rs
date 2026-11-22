@@ -1088,7 +1088,9 @@ impl PulseApp {
     }
 
     fn nav_width(&self) -> f32 {
-        204.0
+        // Самая длинная подпись со счётчиком («Домашние задания · 999»)
+        // занимает 219 px — держим запас, иначе текст обрезается.
+        224.0
     }
 
     fn ui_status(&mut self, ui: &mut egui::Ui) {
@@ -1672,6 +1674,41 @@ mod ui_tests {
             }
         })
         .drop_without_applying_deltas();
+    }
+
+    #[test]
+    fn nav_labels_fit_the_sidebar() {
+        // Подписи в меню уже обрезались («Домашние задания ·» без счётчика),
+        // поэтому ширину сайдбара проверяем измерением, а не на глаз.
+        let (ctx, mut app) = test_app("nav-width");
+        fill_sample(&mut app);
+        frame(&ctx, &mut app);
+
+        let style = ctx.style_of(ctx.theme());
+        let font = style
+            .text_styles
+            .get(&egui::TextStyle::Button)
+            .cloned()
+            .unwrap_or_else(|| egui::FontId::proportional(13.0));
+        let padding = style.spacing.button_padding.x * 2.0;
+        let icon = 16.0 + style.spacing.item_spacing.x;
+
+        for tab in Tab::ALL {
+            // Худший случай: счётчик у самой длинной подписи.
+            let text = format!("{} · 999", tab.label());
+            let width = ctx.fonts_mut(|fonts| {
+                fonts
+                    .layout_no_wrap(text.clone(), font.clone(), egui::Color32::WHITE)
+                    .size()
+                    .x
+            });
+            let needed = width + icon + padding;
+            assert!(
+                needed <= app.nav_width(),
+                "подпись «{text}» не влезает в меню: нужно {needed:.0} px, ширина {} px",
+                app.nav_width()
+            );
+        }
     }
 
     #[test]
