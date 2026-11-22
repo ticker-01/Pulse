@@ -1,0 +1,18 @@
+[package]
+name = "pulse-core"
+description = "Платформенно-независимое ядро МГКАП (Pulse): расписание, домашние задания, успеваемость"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+chrono = { workspace = true }
+regex = { workspace = true }
+anyhow = { workspace = true }
+uuid = { workspace = true }
+directories = { workspace = true }
+ureq = { workspace = true }
+pdf-extract = { workspace = true }

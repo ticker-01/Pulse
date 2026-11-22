@@ -1,0 +1,31 @@
+[package]
+name = "pulse-app"
+description = "Десктопный клиент МГКАП (Pulse) для Windows, Linux и macOS"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+pulse-core = { path = "../pulse-core" }
+anyhow = { workspace = true }
+chrono = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+uuid = { workspace = true }
+eframe = { version = "0.37", default-features = false, features = [
+    "clipboard",
+    "default_fonts",
+    "glow",
+    "wayland",
+    "x11",
+] }
+# `monochrome_emoji_fonts` подключает NotoEmoji и emoji-icon-font: без них
+# иконки рисуются «квадратиками», потому что в Ubuntu-Light эмодзи нет.
+egui = { version = "0.37", features = ["monochrome_emoji_fonts"] }
+# Только для ручного рендера скриншотов: `cargo test -p pulse-app --features shots`.
+egui_kittest = { version = "0.37", features = ["eframe", "wgpu"], optional = true }
+image = { version = "0.25", optional = true }
+
+[features]
+shots = ["dep:egui_kittest", "dep:image"]

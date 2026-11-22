@@ -1,0 +1,182 @@
+//! Хранение состояния приложения: настройки и все пользовательские данные.
+//!
+//! Данные лежат в каталоге `Pulse` (см. `pulse_core::storage`) отдельными
+//! JSON-файлами — так же, как в Android-версии это делали разные `SharedPreferences`.
+
+use pulse_core::bells::BellConfig;
+use pulse_core::homework::HomeworkItem;
+use pulse_core::model::{ScheduleCache, Teacher};
+use pulse_core::performance::{Semester, ROUNDING_TENTHS};
+use pulse_core::storage::{
+    Storage, FILE_BELLS, FILE_HOMEWORK, FILE_PERFORMANCE, FILE_RAW_TEXT, FILE_SCHEDULE,
+    FILE_SETTINGS, FILE_TEACHERS,
+};
+use serde::{Deserialize, Serialize};
+
+/// Акцентный цвет по умолчанию — как `PrimaryPurple` в Android-версии.
+pub const DEFAULT_ACCENT: u32 = 0xFF6C48E1;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct Settings {
+    pub user_name: String,
+    pub user_group: String,
+    pub rounding_mode: i32,
+    pub dark_theme: bool,
+    pub accent: u32,
+    pub auto_refresh: bool,
+    pub last_pdf_url: String,
+    pub last_pdf_file: String,
+}
+
+impl Default for Settings {
+    fn default() -> Self {
+        Self {
+            user_name: "Студент".to_string(),
+            user_group: String::new(),
+            rounding_mode: ROUNDING_TENTHS,
+            dark_theme: true,
+            accent: DEFAULT_ACCENT,
+            auto_refresh: true,
+            last_pdf_url: String::new(),
+            last_pdf_file: String::new(),
+        }
+    }
+}
+
+/// Фасад над файловым хранилищем: один метод на файл.
+pub struct Store {
+    storage: Storage,
+}
+
+impl Store {
+    /// Открывает каталог данных ОС; при ошибке — временный каталог,
+    /// чтобы приложение всё равно запустилось (и сообщило о проблеме).
+    pub fn open() -> (Self, Option<String>) {
+        // Переносимый режим: каталог данных можно задать переменной окружения.
+        if let Some(dir) = std::env::var_os("PULSE_DATA_DIR") {
+            if !dir.is_empty() {
+                return Self::open_at(dir);
+            }
+        }
+        match Storage::open() {
+            Ok(storage) => (Self { storage }, None),
+            Err(error) => {
+                let fallback = std::env::temp_dir().join("pulse-data");
+                let (store, fallback_warning) = Self::open_at(&fallback);
+                let dir = store.data_dir();
+                let message = match fallback_warning {
+                    Some(nested) => format!("Не удалось открыть каталог данных ({error}). {nested}"),
+                    None => {
+                        format!("Не удалось открыть каталог данных ({error}). Используется {dir}")
+                    }
+                };
+                (store, Some(message))
+            }
+        }
+    }
+
+    /// Открывает конкретный каталог — так тесты и перенос данных не зависят
+    /// от каталога ОС.
+    pub fn open_at(dir: impl Into<std::path::PathBuf>) -> (Self, Option<String>) {
+        match Storage::open_at(dir) {
+            Ok(storage) => (Self { storage }, None),
+            Err(error) => {
+                let storage = Storage::open_at(".").expect("текущий каталог доступен");
+                (
+                    Self { storage },
+                    Some(format!("Не удалось открыть каталог данных: {error}")),
+                )
+            }
+        }
+    }
+
+    pub fn data_dir(&self) -> String {
+        self.storage.dir().display().to_string()
+    }
+
+    pub fn load_settings(&self) -> Settings {
+        self.storage.load(FILE_SETTINGS)
+    }
+
+    pub fn save_settings(&self, settings: &Settings) -> Option<String> {
+        self.error_of(self.storage.save(FILE_SETTINGS, settings))
+    }
+
+    pub fn load_schedule(&self) -> ScheduleCache {
+        self.storage.load(FILE_SCHEDULE)
+    }
+
+    pub fn save_schedule(&self, schedule: &ScheduleCache) -> Option<String> {
+        self.error_of(self.storage.save(FILE_SCHEDULE, schedule))
+    }
+
+    pub fn load_teachers(&self) -> Vec<Teacher> {
+        self.storage.load(FILE_TEACHERS)
+    }
+
+    pub fn save_teachers(&self, teachers: &[Teacher]) -> Option<String> {
+        self.error_of(self.storage.save(FILE_TEACHERS, &teachers.to_vec()))
+    }
+
+    pub fn load_homework(&self) -> Vec<HomeworkItem> {
+        let mut items: Vec<HomeworkItem> = self.storage.load(FILE_HOMEWORK);
+        HomeworkItem::sort_items(&mut items);
+        items
+    }
+
+    pub fn save_homework(&self, items: &[HomeworkItem]) -> Option<String> {
+        self.error_of(self.storage.save(FILE_HOMEWORK, &items.to_vec()))
+    }
+
+    pub fn load_semesters(&self) -> Vec<Semester> {
+        let mut semesters: Vec<Semester> = self.storage.load(FILE_PERFORMANCE);
+        if semesters.is_empty() {
+            semesters.push(Semester::new("1 семестр"));
+        }
+        semesters
+    }
+
+    pub fn save_semesters(&self, semesters: &[Semester]) -> Option<String> {
+        self.error_of(self.storage.save(FILE_PERFORMANCE, &semesters.to_vec()))
+    }
+
+    pub fn load_bells(&self) -> BellConfig {
+        self.storage.load(FILE_BELLS)
+    }
+
+    pub fn save_bells(&self, bells: &BellConfig) -> Option<String> {
+        self.error_of(self.storage.save(FILE_BELLS, bells))
+    }
+
+    pub fn load_raw_text(&self) -> String {
+        self.storage.load_text(FILE_RAW_TEXT).unwrap_or_default()
+    }
+
+    pub fn save_raw_text(&self, text: &str) -> Option<String> {
+        self.error_of(self.storage.save_text(FILE_RAW_TEXT, text))
+    }
+
+    /// Полный сброс пользовательских данных (каталог остаётся).
+    pub fn reset_all(&self) -> Option<String> {
+        let mut error = None;
+        for file in [
+            FILE_SETTINGS,
+            FILE_SCHEDULE,
+            FILE_TEACHERS,
+            FILE_HOMEWORK,
+            FILE_PERFORMANCE,
+            FILE_BELLS,
+            FILE_RAW_TEXT,
+        ] {
+            if let Some(message) = self.error_of(self.storage.remove(file)) {
+                error = Some(message);
+            }
+        }
+        error
+    }
+
+    fn error_of(&self, result: anyhow::Result<()>) -> Option<String> {
+        result.err().map(|error| format!("{error:#}"))
+    }
+}
