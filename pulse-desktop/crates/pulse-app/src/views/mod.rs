@@ -81,8 +81,11 @@ fn badge_with_fill(ui: &mut egui::Ui, text: &str, color: egui::Color32, fill: f3
     let galley = ui.painter().layout_no_wrap(text.to_owned(), font, color);
     let size = galley.size() + padding * 2.0;
     let (rect, _) = ui.allocate_exact_size(size, egui::Sense::hover());
-    ui.painter()
-        .rect_filled(rect, egui::CornerRadius::same(8), color.gamma_multiply(fill));
+    ui.painter().rect_filled(
+        rect,
+        egui::CornerRadius::same(8),
+        color.gamma_multiply(fill),
+    );
     ui.painter().galley(rect.min + padding, galley, color);
 }
 
@@ -234,10 +237,7 @@ pub(crate) fn bar_width(
     let radius = egui::CornerRadius::same((height / 2.0) as u8);
     ui.painter()
         .rect_filled(rect, radius, border_color(ui).gamma_multiply(0.5));
-    let filled = egui::Rect::from_min_size(
-        rect.min,
-        egui::vec2(width * shown, height),
-    );
+    let filled = egui::Rect::from_min_size(rect.min, egui::vec2(width * shown, height));
     ui.painter().rect_filled(filled, radius, color);
 }
 

@@ -1977,6 +1977,37 @@ mod ui_tests {
         assert_eq!(subjects_of(&app.my_schedule, today), vec!["Химия"]);
     }
 
+    /// Максимальная непрозрачность вершин содержимого вкладки.
+    ///
+    /// Считаем по тесселированным треугольникам: так проверяется реальный путь
+    /// отрисовки (`multiply_opacity`), а не только формула кривой.
+    fn content_peak_alpha(ctx: &egui::Context, app: &mut PulseApp, nav_width: f32) -> u8 {
+        let input = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(1280.0, 800.0),
+            )),
+            ..Default::default()
+        };
+        let output = ctx.run_ui(input, |ui| app.draw(ui));
+        let primitives = ctx.tessellate(output.shapes, output.pixels_per_point);
+        let mut peak = 0u8;
+        for primitive in primitives {
+            let egui::epaint::Primitive::Mesh(mesh) = primitive.primitive else {
+                continue;
+            };
+            for vertex in &mesh.vertices {
+                // Только середина экрана: шапка и строка статуса не гаснут.
+                let in_content =
+                    vertex.pos.x > nav_width && vertex.pos.y > 70.0 && vertex.pos.y < 740.0;
+                if in_content {
+                    peak = peak.max(vertex.color.a());
+                }
+            }
+        }
+        peak
+    }
+
     #[test]
     fn tab_switch_fades_in() {
         let (ctx, mut app) = test_app("fade");
@@ -1984,20 +2015,47 @@ mod ui_tests {
         assert_eq!(app.tab_fade(0.0), 1.0);
 
         app.animations = true;
+        fill_sample(&mut app);
         app.tab = Tab::Performance;
         // Первый кадр фиксирует момент переключения.
         frame(&ctx, &mut app);
         assert_eq!(app.shown_tab, Tab::Performance);
 
         let switched_at = app.tab_switched_at;
-        assert_eq!(app.tab_fade(switched_at), 0.0, "сразу после переключения ещё пусто");
+        assert_eq!(
+            app.tab_fade(switched_at),
+            0.0,
+            "сразу после переключения ещё пусто"
+        );
         let middle = app.tab_fade(switched_at + PulseApp::TAB_FADE_SECS / 2.0);
         assert!(
             middle > 0.5 && middle < 1.0,
             "середина перехода должна быть плавной, а не скачком: {middle}"
         );
         assert_eq!(app.tab_fade(switched_at + PulseApp::TAB_FADE_SECS), 1.0);
-        assert_eq!(app.tab_fade(switched_at + 3_600.0), 1.0, "старая метка не гасит экран");
+        assert_eq!(
+            app.tab_fade(switched_at + 3_600.0),
+            1.0,
+            "старая метка не гасит экран"
+        );
+
+        // Реальная отрисовка: в разгар перехода содержимое притушено.
+        let nav_right = app.nav_width() + 24.0;
+        let mid_alpha = content_peak_alpha(&ctx, &mut app, nav_right);
+        assert!(
+            mid_alpha < 160,
+            "содержимое должно проявляться плавно, а не появляться целиком: пик {mid_alpha}"
+        );
+
+        // Через несколько кадров всё непрозрачно — «полутусклым» не остаётся.
+        for _ in 0..20 {
+            frame(&ctx, &mut app);
+        }
+        let settled = content_peak_alpha(&ctx, &mut app, nav_right);
+        assert!(
+            settled > 240,
+            "после перехода содержимое должно быть полностью видно: пик {settled}"
+        );
 
         // Смена вкладки заново запускает проявление.
         app.tab = Tab::Homework;
