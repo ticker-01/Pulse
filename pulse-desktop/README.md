@@ -33,7 +33,7 @@ winit/glow, а системный шрифт для кириллицы подх�
 |---|---|---|
 | Windows x86_64 | `cargo zigbuild --release -p pulse-app --target x86_64-pc-windows-gnu` | `pulse-app.exe` (PE32+, GUI-подсистема, без консольного окна) |
 | Linux x86_64 | `cargo build --release -p pulse-app` | `pulse-app` |
-| macOS x86_64 и arm64 | CI `.github/workflows/release.yml` на `macos-15` | `МГКАП.app` → `.zip` и `.dmg` |
+| macOS x86_64 и arm64 | CI `.github/workflows/release.yml` на `macos-15` | `МГКАП.app` → `.zip` и `.dmg`, плюс универсальный бинарник (`lipo`) |
 
 Windows кросс-компилируется с Linux: `zig` подменяет mingw-линкер, отдельный
 `mingw-w64` не нужен.
@@ -60,7 +60,7 @@ gh run download <run-id>                # артефакты в текущий �
 | Папка | Содержимое |
 |---|---|
 | `dist/windows/` | `mgkap.exe` (статический CRT, без Visual C++ Redistributable) |
-| `dist/macos/` | `mgkap-macos-{aarch64,x86_64}.{dmg,zip}` из CI |
+| `dist/macos/` | `mgkap-macos-universal.{dmg,zip}` — один файл на любой Mac, плюс сборки под arm64 и Intel |
 | `dist/linux/` | `mgkap` — локальная release-сборка |
 
 Сам каталог `dist` в `.gitignore`: бинарники в репозиторий не попадают.
