@@ -25,7 +25,12 @@ cargo test --workspace                  # 68 тестов ядра + 10 тест
 ```
 
 На Windows и macOS ничего дополнительно ставить не нужно: `eframe` тянет
-winit/glow, а системный шрифт для кириллицы подхватывается автоматически.
+winit и системный шрифт для кириллицы подхватывается автоматически. Рендерер
+зависит от ОС: на Linux и macOS — OpenGL (`glow`), на Windows — wgpu/DirectX 12.
+Причина в Windows: без вендорных драйверов (виртуалка, RDP, «Microsoft Basic
+Display») OpenGL там версии 1.1, а `egui_glow` требует 2.0+ и приложение
+падало бы с `egui_glow requires opengl 2.0+`; у DX12 есть программный адаптер
+WARP.
 
 ### Готовые сборки: Windows и macOS
 

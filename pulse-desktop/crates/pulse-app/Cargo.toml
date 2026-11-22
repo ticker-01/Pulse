@@ -27,5 +27,17 @@ egui = { version = "0.37", features = ["monochrome_emoji_fonts"] }
 egui_kittest = { version = "0.37", features = ["eframe", "wgpu"], optional = true }
 image = { version = "0.25", optional = true }
 
+# На Windows OpenGL-рендерер не годится: без вендорных драйверов (VM, RDP,
+# «Microsoft Basic Display») система даёт OpenGL 1.1, а egui_glow требует 2.0+
+# и приложение падает с `egui_glow requires opengl 2.0+`. wgpu идёт через
+# DirectX 12, где есть программный адаптер WARP. На Linux и macOS остаётся glow.
+[target.'cfg(target_os = "windows")'.dependencies]
+eframe = { version = "0.37", default-features = false, features = [
+    "clipboard",
+    "default_fonts",
+    "glow",
+    "wgpu",
+] }
+
 [features]
 shots = ["dep:egui_kittest", "dep:image"]
