@@ -99,6 +99,53 @@ jobs:
           Copy-Item target/release/pulse-app.exe dist/mgkap.exe
           Get-Item dist/mgkap.exe | Format-List Name,Length
 
+      - name: Запуск приложения (smoke)
+        shell: pwsh
+        run: |
+          $env:PULSE_DATA_DIR = Join-Path $env:RUNNER_TEMP "mgkap-smoke"
+          Remove-Item -Recurse -Force $env:PULSE_DATA_DIR -ErrorAction SilentlyContinue
+          $log = Join-Path $env:RUNNER_TEMP "mgkap-smoke.log"
+          $out = Join-Path $env:RUNNER_TEMP "mgkap-smoke-out.log"
+
+          $p = Start-Process -FilePath "dist/mgkap.exe" -PassThru `
+            -RedirectStandardError $log -RedirectStandardOutput $out
+          $waited = 0
+          $fetched = $false
+          while ($waited -lt 60) {
+            Start-Sleep -Seconds 1
+            $waited++
+            if ($p.HasExited) { break }
+            if (Test-Path (Join-Path $env:PULSE_DATA_DIR "schedule.json")) {
+              $fetched = $true
+              Start-Sleep -Seconds 3
+              break
+            }
+          }
+          $alive = -not $p.HasExited
+          if ($alive) { Stop-Process -Id $p.Id -Force }
+
+          Write-Host "прожил секунд: $waited"
+          Write-Host "расписание скачано: $fetched"
+          Write-Host "--- лог:"
+          Get-Content $log -ErrorAction SilentlyContinue
+          Write-Host "--- файлы данных:"
+          Get-ChildItem $env:PULSE_DATA_DIR -ErrorAction SilentlyContinue |
+            Format-Table Name, Length
+
+          $text = (Get-Content $log -Raw -ErrorAction SilentlyContinue)
+          if ($text -match "panic") {
+            throw "в логе паника"
+          }
+          if (-not $alive) {
+            throw "mgkap.exe завершился сам за $waited с (код $($p.ExitCode))"
+          }
+          if ($waited -lt 10) {
+            throw "приложение прожило меньше 10 секунд — старт сломан"
+          }
+          if (-not $fetched) {
+            Write-Host "::warning::сайт колледжа не ответил за минуту — проверено только, что приложение стартует"
+          }
+
       - uses: actions/upload-artifact@v7
         with:
           name: mgkap-windows-x86_64
@@ -198,6 +245,81 @@ jobs:
             file "$BINARY"
             ls -lh "$OUT.zip" "$OUT.dmg"
           done
+
+      - name: Запуск приложения (smoke)
+        env:
+          APP_NAME: "МГКАП"
+        run: |
+          set -euo pipefail
+          BINARY="dist/$APP_NAME.app/Contents/MacOS/pulse-app"
+          test -x "$BINARY" || { echo "в бандле нет исполняемого файла"; exit 1; }
+
+          # Никаких зависимостей из Homebrew: у пользователя их не будет.
+          otool -L "$BINARY"
+          if otool -L "$BINARY" | grep -E "/(opt/homebrew|usr/local)/"; then
+            echo "бинарник зависит от библиотек Homebrew — на чужом Mac не запустится"
+            exit 1
+          fi
+
+          DATA="$RUNNER_TEMP/mgkap-smoke"
+          LOG="$RUNNER_TEMP/mgkap-smoke.log"
+          rm -rf "$DATA"
+          PULSE_DATA_DIR="$DATA" "./$BINARY" > "$LOG" 2>&1 &
+          PID=$!
+
+          # Окно создаётся в GUI-сессии раннера; если приложение падает на
+          # старте (нет Metal, битый бандл), процесс умирает за секунды.
+          ALIVE=0
+          FETCHED=0
+          for _ in $(seq 1 60); do
+            sleep 1
+            if ! kill -0 "$PID" 2>/dev/null; then
+              break
+            fi
+            ALIVE=$((ALIVE + 1))
+            if [ -s "$DATA/schedule.json" ]; then
+              FETCHED=1
+              # Ещё пара секунд — чтобы дописались остальные файлы.
+              sleep 3
+              break
+            fi
+          done
+          kill "$PID" 2>/dev/null || true
+          wait "$PID" 2>/dev/null || true
+
+          echo "--- прожил секунд: $ALIVE"
+          echo "--- расписание скачано: $FETCHED"
+          echo "--- лог приложения:"; cat "$LOG" || true
+          echo "--- файлы данных:"; ls -l "$DATA" || true
+
+          if grep -qiE "panic|thread '.*' panicked" "$LOG"; then
+            echo "в логе паника"
+            exit 1
+          fi
+          if [ "$ALIVE" -lt 10 ]; then
+            echo "приложение прожило меньше 10 секунд — старт сломан"
+            exit 1
+          fi
+          if [ "$FETCHED" = 1 ]; then
+            echo "дней в кэше: $(grep -o '"pairNumber"' "$DATA/schedule.json" | wc -l) пар"
+          else
+            echo "::warning::сайт колледжа не ответил за минуту — проверено только, что приложение стартует"
+          fi
+
+      - name: Скриншоты вкладок на macOS
+        continue-on-error: true
+        run: |
+          cargo test -p pulse-app --features shots render_tabs_to_png -- --ignored --nocapture
+          ls -l /tmp/pulse-shots
+
+      - name: Скриншоты (артефакт)
+        if: always()
+        continue-on-error: true
+        uses: actions/upload-artifact@v7
+        with:
+          name: mgkap-macos-screenshots
+          path: /tmp/pulse-shots/*.png
+          if-no-files-found: warn
 
       - uses: actions/upload-artifact@v7
         with:
