@@ -96,7 +96,7 @@ impl PulseApp {
             .inner_margin(egui::Margin::symmetric(12, 8))
             .show(ui, |ui| {
                 ui.horizontal(|ui| {
-                    ui.label(egui::RichText::new("📦 Обновление").size(13.0).strong().color(accent));
+                    ui.label(egui::RichText::new("[ Обновление ]").size(13.0).strong().color(accent));
                     if !self.update_check_active {
                         if ui
                             .small_button("Обновить")

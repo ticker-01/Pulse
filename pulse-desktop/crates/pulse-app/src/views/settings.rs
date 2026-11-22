@@ -332,7 +332,7 @@ impl PulseApp {
                 ui.add_space(4.0);
                 let accent = theme::color(self.settings.accent);
                 ui.label(
-                    egui::RichText::new(format!("📦 Версия {} доступна", version))
+                    egui::RichText::new(format!("Версия {} доступна", version))
                         .size(13.0)
                         .color(accent),
                 );
