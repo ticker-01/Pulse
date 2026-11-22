@@ -54,6 +54,17 @@ gh run list --workflow=release.yml --limit 1
 gh run download <run-id>                # артефакты в текущий каталог
 ```
 
+Готовые файлы для раздачи лежат в `dist/` — по папке на систему, в каждой свой
+`README.md` с инструкцией по установке и `SHA256SUMS.txt`:
+
+| Папка | Содержимое |
+|---|---|
+| `dist/windows/` | `mgkap.exe` (статический CRT, без Visual C++ Redistributable) |
+| `dist/macos/` | `mgkap-macos-{aarch64,x86_64}.{dmg,zip}` из CI |
+| `dist/linux/` | `mgkap` — локальная release-сборка |
+
+Сам каталог `dist` в `.gitignore`: бинарники в репозиторий не попадают.
+
 Сборка macOS подписана ad-hoc (`codesign --sign -`): на Apple Silicon
 неподписанный бинарник не запускается вовсе. Нотаризации Apple нет, поэтому
 при первом запуске Gatekeeper скажет «неизвестный разработчик» — открывать
