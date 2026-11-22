@@ -235,11 +235,7 @@ impl PulseApp {
         ui.add_space(6.0);
 
         for date in days {
-            let lessons = self
-                .my_schedule
-                .get(&date)
-                .cloned()
-                .unwrap_or_default();
+            let lessons = self.my_schedule.get(&date).cloned().unwrap_or_default();
             let is_today = date == today;
             let title = format!(
                 "{}, {}",

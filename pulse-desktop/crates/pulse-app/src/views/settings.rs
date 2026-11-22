@@ -263,7 +263,8 @@ impl PulseApp {
                 .changed();
 
             ui.add_space(2.0);
-            muted(ui, format!("Последнее обновление: {}", last_fetch_label(self.settings.last_fetch_at)));
+            let last = last_fetch_label(self.settings.last_fetch_at);
+            muted(ui, format!("Последнее обновление: {last}"));
 
             ui.horizontal(|ui| {
                 let busy = self.fetch.is_some();

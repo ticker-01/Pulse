@@ -10,7 +10,9 @@ use pulse_core::datetime;
 use crate::app::PulseApp;
 use crate::theme;
 use crate::views::schedule::shift_days;
-use crate::views::{badge, card, dark, empty_state, muted, muted_color, pulse_badge, subject_visual};
+use crate::views::{
+    badge, card, dark, empty_state, muted, muted_color, pulse_badge, subject_visual,
+};
 
 impl PulseApp {
     pub(crate) fn ui_groups(&mut self, ui: &mut egui::Ui) {
