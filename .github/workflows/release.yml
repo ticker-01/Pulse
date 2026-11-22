@@ -138,15 +138,15 @@ jobs:
           VERSION=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
           echo "версия $VERSION"
 
-          # Один и тот же .app собирается дважды — под каждую архитектуру.
-          for arch in aarch64 x86_64; do
-            TARGET="$arch-apple-darwin"
-            APP="dist/$APP_NAME.app"
-            rm -rf dist
-            mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
-
-            cp "target/$TARGET/release/$APP_EXE" "$APP/Contents/MacOS/$APP_EXE"
-            chmod +x "$APP/Contents/MacOS/$APP_EXE"
+          # Собирает .app из готового бинарника: plist, подпись ad-hoc.
+          # Сертификат Apple не нужен, но на Apple Silicon неподписанный
+          # бинарник не запускается вовсе.
+          make_app() {
+            local binary="$1" app="$2"
+            rm -rf "$app"
+            mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
+            cp "$binary" "$app/Contents/MacOS/$APP_EXE"
+            chmod +x "$app/Contents/MacOS/$APP_EXE"
 
             printf '%s\n' \
               '<?xml version="1.0" encoding="UTF-8"?>' \
@@ -164,19 +164,38 @@ jobs:
               '  <key>NSHighResolutionCapable</key><true/>' \
               '  <key>NSSupportsAutomaticGraphicsSwitching</key><true/>' \
               '</dict>' \
-              '</plist>' > "$APP/Contents/Info.plist"
+              '</plist>' > "$app/Contents/Info.plist"
 
-            plutil -lint "$APP/Contents/Info.plist"
+            plutil -lint "$app/Contents/Info.plist"
+            codesign --force --deep --sign - "$app"
+            codesign --verify --deep --strict "$app"
+          }
 
-            # Подпись ad-hoc: сертификат Apple не нужен, но на Apple Silicon
-            # неподписанный бинарник не запускается вовсе.
-            codesign --force --deep --sign - "$APP"
-            codesign --verify --deep --strict "$APP"
+          # Отдельно под каждую архитектуру и один общий бинарник (universal2).
+          for arch in aarch64 x86_64 universal; do
+            case "$arch" in
+              universal)
+                mkdir -p target/universal
+                lipo -create \
+                  -output "target/universal/$APP_EXE" \
+                  "target/x86_64-apple-darwin/release/$APP_EXE" \
+                  "target/aarch64-apple-darwin/release/$APP_EXE"
+                lipo -info "target/universal/$APP_EXE"
+                BINARY="target/universal/$APP_EXE"
+                ;;
+              *)
+                BINARY="target/$arch-apple-darwin/release/$APP_EXE"
+                ;;
+            esac
+
+            rm -rf dist
+            APP="dist/$APP_NAME.app"
+            make_app "$BINARY" "$APP"
 
             OUT="mgkap-macos-$arch"
             ditto -c -k --sequesterRsrc --keepParent "$APP" "$OUT.zip"
             hdiutil create -volname "$APP_NAME" -srcfolder "$APP" -ov -format UDZO "$OUT.dmg"
-            file "target/$TARGET/release/$APP_EXE"
+            file "$BINARY"
             ls -lh "$OUT.zip" "$OUT.dmg"
           done
 
