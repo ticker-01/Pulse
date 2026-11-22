@@ -7,6 +7,7 @@
 
 pub mod analytics;
 pub mod bells;
+pub mod changes;
 pub mod datetime;
 pub mod homework;
 pub mod model;
@@ -17,6 +18,7 @@ pub mod storage;
 pub mod subject_theme;
 
 pub use bells::{BellConfig, BellDay, BellSlot};
+pub use changes::{diff_schedules, ChangeKind, LessonBrief, ScheduleChange};
 pub use homework::HomeworkItem;
 pub use model::{now_lessons, LessonPair, ScheduleCache, Teacher};
 pub use performance::{Semester, SubjectGrade};

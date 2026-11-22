@@ -19,6 +19,8 @@ pub const FILE_HOMEWORK: &str = "homework.json";
 pub const FILE_PERFORMANCE: &str = "performance.json";
 pub const FILE_BELLS: &str = "bells.json";
 pub const FILE_RAW_TEXT: &str = "last_raw_text.txt";
+/// Изменения расписания, найденные при последнем обновлении.
+pub const FILE_CHANGES: &str = "schedule_changes.json";
 
 #[derive(Debug, Clone)]
 pub struct Storage {

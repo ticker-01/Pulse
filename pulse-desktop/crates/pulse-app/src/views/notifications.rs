@@ -155,6 +155,23 @@ impl PulseApp {
             }
         }
 
+        // ── замены и переносы из последнего обновления ──────────────────────
+        if !self.changes.is_empty() {
+            let count = self.changes.len();
+            let first = &self.changes[0];
+            notices.push(Notice {
+                icon: "📅",
+                group: "Расписание",
+                title: format!(
+                    "Изменения в расписании: {count} ({})",
+                    datetime::format_short_date(first.date)
+                ),
+                detail: first.describe(),
+                color: COLOR_SATISFACTORY,
+                tab: Tab::Schedule,
+            });
+        }
+
         // ── на сегодня и завтра ─────────────────────────────────────────────
         for item in self
             .homework

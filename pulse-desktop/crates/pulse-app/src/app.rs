@@ -6,6 +6,7 @@ use std::time::{Duration, Instant};
 use chrono::{Datelike, Days, Local, NaiveDate, NaiveTime};
 use eframe::egui;
 use pulse_core::bells::{default_schedule, BellConfig, BellDay, BellSlot};
+use pulse_core::changes::{self, ScheduleChange};
 use pulse_core::datetime;
 use pulse_core::homework::HomeworkItem;
 use pulse_core::model::{LessonPair, ScheduleCache, Teacher};
@@ -267,6 +268,8 @@ pub(crate) struct PulseApp {
     pub(crate) groups: Vec<String>,
     pub(crate) active_group: String,
     pub(crate) fetch: Option<FetchJob>,
+    /// Замены и переносы, найденные при последнем обновлении с сайта.
+    pub(crate) changes: Vec<ScheduleChange>,
 
     pub(crate) selected_date: NaiveDate,
     pub(crate) week_mode: bool,
@@ -323,6 +326,7 @@ impl PulseApp {
         let homework = store.load_homework();
         let semesters = store.load_semesters();
         let raw_text = store.load_raw_text();
+        let changes = store.load_changes();
 
         theme::install_fonts(&cc.egui_ctx);
         theme::apply(&cc.egui_ctx, settings.dark_theme, settings.accent);
@@ -356,6 +360,7 @@ impl PulseApp {
             groups,
             active_group,
             fetch: None,
+            changes,
             selected_date: today,
             week_mode: false,
             teacher_query: String::new(),
@@ -602,6 +607,9 @@ impl PulseApp {
     /// Как часто обновлять расписание само, если включено автообновление.
     pub(crate) const AUTO_REFRESH_INTERVAL_SECS: i64 = 6 * 60 * 60;
 
+    /// Сколько дней хранить найденные замены и переносы.
+    pub(crate) const CHANGES_KEEP_DAYS: i64 = 21;
+
     /// Скачивать ли расписание при запуске: пустой кэш или устаревшие данные.
     pub(crate) fn should_auto_fetch(&self, now_ts: i64) -> bool {
         if !self.settings.auto_refresh {
@@ -712,6 +720,10 @@ impl PulseApp {
     }
 
     fn finish_fetch(&mut self, outcome: FetchOutcome) {
+        // Прошлые версии нужны, чтобы показать, что именно поменял колледж.
+        let previous_group = self.schedule.clone();
+        let previous_my = self.my_schedule.clone();
+
         // Запоминаем, откуда пришли данные — это видно в настройках.
         if let Some(url) = outcome.urls.last() {
             self.settings.last_pdf_url = url.clone();
@@ -745,6 +757,18 @@ impl PulseApp {
         self.reparse();
         self.rebuild_group_view();
 
+        // Что изменилось по сравнению с прошлой версией расписания.
+        let found = match self.settings.role {
+            Role::Teacher => changes::diff_schedules(&previous_my, &self.my_schedule),
+            Role::Student => changes::diff_schedules(&previous_group, &self.schedule),
+        };
+        let found = changes::keep_recent(found, self.today(), Self::CHANGES_KEEP_DAYS);
+        let found_count = found.len();
+        self.changes = found;
+        if let Some(error) = self.store.save_changes(&self.changes) {
+            self.set_status(StatusKind::Error, error);
+        }
+
         let days = self.schedule.len();
         let lessons: usize = self.schedule.values().map(|items| items.len()).sum();
         let mut message = format!(
@@ -753,6 +777,11 @@ impl PulseApp {
         );
         if self.active_group.is_empty() {
             message.push_str(" Группа не выбрана — укажите её в настройках.");
+        }
+        if found_count > 0 {
+            message.push_str(&format!(
+                " Изменений в расписании: {found_count} — см. блок «Замены и переносы»."
+            ));
         }
         if !outcome.errors.is_empty() {
             message.push_str(&format!(
@@ -1687,6 +1716,46 @@ mod ui_tests {
         app.my_schedule = app.schedule.clone();
         app.my_schedule_for = Some("Иванов И.И.".to_string());
 
+        // Замены и переносы: карточка на «Расписании» и строка в «Уведомлениях».
+        app.changes = vec![
+            pulse_core::changes::ScheduleChange {
+                date: today,
+                pair_number: 2,
+                group: "П-11".to_string(),
+                kind: pulse_core::changes::ChangeKind::Replaced,
+                before: Some(pulse_core::changes::LessonBrief {
+                    subject: "Физика".to_string(),
+                    teacher: "Петрова А.С.".to_string(),
+                    room: "305".to_string(),
+                    time: "10:10 – 11:40".to_string(),
+                }),
+                after: Some(pulse_core::changes::LessonBrief {
+                    subject: "Математика".to_string(),
+                    teacher: "Иванов И.И.".to_string(),
+                    room: "201".to_string(),
+                    time: "10:10 – 11:40".to_string(),
+                }),
+            },
+            pulse_core::changes::ScheduleChange {
+                date: tomorrow,
+                pair_number: 1,
+                group: "П-11".to_string(),
+                kind: pulse_core::changes::ChangeKind::Moved,
+                before: Some(pulse_core::changes::LessonBrief {
+                    subject: "История".to_string(),
+                    teacher: "Петрова А.С.".to_string(),
+                    room: "305".to_string(),
+                    time: "08:30 – 10:00".to_string(),
+                }),
+                after: Some(pulse_core::changes::LessonBrief {
+                    subject: "История".to_string(),
+                    teacher: "Петрова А.С.".to_string(),
+                    room: "305".to_string(),
+                    time: "12:30 – 14:00".to_string(),
+                }),
+            },
+        ];
+
         let mut overdue = HomeworkItem::new("Физика", "Отчёт по лабораторной", today);
         overdue.due_date = today - Days::new(2);
         overdue.assign_date = today - Days::new(9);
@@ -2064,6 +2133,65 @@ mod ui_tests {
     }
 
     #[test]
+    fn update_finds_replacements_and_keeps_them_after_restart() {
+        let (ctx, mut app) = test_app("changes");
+        let today = app.today();
+
+        // Первая версия расписания — она уже лежит в кэше как «прошлая».
+        app.raw_text = raw_text_for_teachers(today);
+        app.active_group = "21э".to_string();
+        app.reparse();
+        assert!(!app.schedule.is_empty(), "прошлая версия должна разобраться");
+
+        // Колледж выложил новую версию: 1 пара вместо «Математика» — «Информатика».
+        let updated = raw_text_for_teachers(today)
+            .replace("│21э│1│Математика│201│Иванов И.И.│", "│21э│1│Информатика│204│Глазовский Н.В.│");
+        app.finish_fetch(FetchOutcome {
+            urls: vec!["https://college-ripo.by/wp-content/uploads/2026/11/new.pdf".to_string()],
+            text: updated,
+            parsed_files: 1,
+            errors: Vec::new(),
+        });
+
+        assert_eq!(app.changes.len(), 1, "изменения: {:?}", app.changes);
+        let change = &app.changes[0];
+        assert_eq!(change.kind, pulse_core::changes::ChangeKind::Replaced);
+        assert_eq!(change.date, today);
+        assert_eq!(change.pair_number, 1);
+        assert_eq!(
+            change.before.as_ref().map(|brief| brief.subject.as_str()),
+            Some("Математика")
+        );
+        assert_eq!(
+            change.after.as_ref().map(|brief| brief.subject.as_str()),
+            Some("Информатика")
+        );
+
+        // Список сохранён на диск: карточка не исчезнет после перезапуска.
+        assert_eq!(app.store.load_changes().len(), 1);
+
+        // Кадр с карточкой рисуется без паники (уведомления тоже её показывают).
+        app.tab = Tab::Schedule;
+        frame(&ctx, &mut app);
+        app.tab = Tab::Notifications;
+        frame(&ctx, &mut app);
+
+        // Перезапуск с тем же каталогом данных.
+        let dir = app.store.data_dir();
+        let (store, warning) = Store::open_at(&dir);
+        assert!(warning.is_none(), "каталог недоступен: {warning:?}");
+        let cc = eframe::CreationContext::_new_kittest(ctx.clone());
+        let mut restarted = PulseApp::with_store(&cc, store, None);
+        restarted.animations = false;
+        assert_eq!(restarted.changes.len(), 1);
+
+        // «Скрыть» убирает карточку и с диска.
+        restarted.clear_changes();
+        assert!(restarted.changes.is_empty());
+        assert!(restarted.store.load_changes().is_empty());
+    }
+
+    #[test]
     fn auto_fetch_only_when_data_is_stale() {
         let (_ctx, mut app) = test_app("auto-fetch");
 
@@ -2112,17 +2240,26 @@ mod ui_tests {
         app.save_homework();
         app.raw_text = "РАСПИСАНИЕ НА НОЯБРЬ".to_string();
         assert!(app.store.save_raw_text(&app.raw_text).is_none());
+        let today = app.today();
+        app.changes = vec![ScheduleChange {
+            date: today,
+            pair_number: 1,
+            ..ScheduleChange::default()
+        }];
+        assert!(app.store.save_changes(&app.changes).is_none());
 
         app.tab = Tab::Settings;
         app.reset_all_data();
 
         assert!(app.homework.is_empty());
         assert!(app.raw_text.is_empty());
+        assert!(app.changes.is_empty(), "замены тоже сбрасываются");
         assert!(app.semesters.len() == 1 && app.semesters[0].grades.is_empty());
         assert_eq!(app.settings.accent, crate::store::DEFAULT_ACCENT);
         // Файлы тоже удалены, а не только состояние в памяти.
         assert!(app.store.load_raw_text().is_empty());
         assert!(app.store.load_homework().is_empty());
+        assert!(app.store.load_changes().is_empty());
         // После сброса интерфейс должен отрисоваться без данных.
         frame(&ctx, &mut app);
     }

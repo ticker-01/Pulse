@@ -550,6 +550,7 @@ impl PulseApp {
         self.teacher_week_mode = false;
         self.my_schedule = ScheduleCache::new();
         self.my_schedule_for = None;
+        self.changes.clear();
         self.group_view_group.clear();
         self.group_view_schedule = ScheduleCache::new();
         self.group_view_date = self.today();

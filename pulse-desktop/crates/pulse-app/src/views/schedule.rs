@@ -32,6 +32,7 @@ impl PulseApp {
         });
         muted(ui, format!("Источник: {}", pulse_core::PAGE_URL));
         ui.add_space(8.0);
+        self.ui_changes_card(ui);
 
         // Навигация по датам.
         ui.horizontal(|ui| {

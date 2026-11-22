@@ -174,6 +174,7 @@ impl PulseApp {
             "Здесь только ваши пары. Расписание любой группы — во вкладке «Группы».",
         );
         ui.add_space(8.0);
+        self.ui_changes_card(ui);
 
         if self.raw_text.trim().is_empty() {
             empty_state(

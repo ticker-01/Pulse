@@ -4,12 +4,13 @@
 //! JSON-файлами — так же, как в Android-версии это делали разные `SharedPreferences`.
 
 use pulse_core::bells::BellConfig;
+use pulse_core::changes::ScheduleChange;
 use pulse_core::homework::HomeworkItem;
 use pulse_core::model::{ScheduleCache, Teacher};
 use pulse_core::performance::{Semester, ROUNDING_TENTHS};
 use pulse_core::storage::{
-    Storage, FILE_BELLS, FILE_HOMEWORK, FILE_PERFORMANCE, FILE_RAW_TEXT, FILE_SCHEDULE,
-    FILE_SETTINGS, FILE_TEACHERS,
+    Storage, FILE_BELLS, FILE_CHANGES, FILE_HOMEWORK, FILE_PERFORMANCE, FILE_RAW_TEXT,
+    FILE_SCHEDULE, FILE_SETTINGS, FILE_TEACHERS,
 };
 use serde::{Deserialize, Serialize};
 
@@ -180,6 +181,21 @@ impl Store {
         self.storage.load_text(FILE_RAW_TEXT).unwrap_or_default()
     }
 
+    /// Изменения расписания, найденные при последнем обновлении.
+    pub fn load_changes(&self) -> Vec<ScheduleChange> {
+        let mut changes: Vec<ScheduleChange> = self.storage.load(FILE_CHANGES);
+        changes.sort_by(|left, right| {
+            left.date
+                .cmp(&right.date)
+                .then(left.pair_number.cmp(&right.pair_number))
+        });
+        changes
+    }
+
+    pub fn save_changes(&self, changes: &[ScheduleChange]) -> Option<String> {
+        self.error_of(self.storage.save(FILE_CHANGES, &changes.to_vec()))
+    }
+
     pub fn save_raw_text(&self, text: &str) -> Option<String> {
         self.error_of(self.storage.save_text(FILE_RAW_TEXT, text))
     }
@@ -195,6 +211,7 @@ impl Store {
             FILE_PERFORMANCE,
             FILE_BELLS,
             FILE_RAW_TEXT,
+            FILE_CHANGES,
         ] {
             if let Some(message) = self.error_of(self.storage.remove(file)) {
                 error = Some(message);
