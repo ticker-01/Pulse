@@ -88,6 +88,9 @@ jobs:
 
       - name: Собрать
         run: cargo build --release -p pulse-app
+        # Статический CRT: exe запускается без установки Visual C++ Redistributable.
+        env:
+          RUSTFLAGS: -C target-feature=+crt-static
 
       - name: Переименовать
         shell: pwsh
