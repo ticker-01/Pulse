@@ -2,9 +2,7 @@
 
 use std::sync::mpsc::{self, Receiver, TryRecvError};
 use std::time::{Duration, Instant};
-
 use chrono::{Datelike, Days, Local, NaiveDate, NaiveTime};
-use eframe::egui;
 use pulse_core::bells::{default_schedule, BellConfig, BellDay, BellSlot};
 use pulse_core::changes::{self, ScheduleChange};
 use pulse_core::datetime;
@@ -13,6 +11,7 @@ use pulse_core::model::{LessonPair, ScheduleCache, Teacher};
 use pulse_core::parser;
 use pulse_core::performance::Semester;
 use pulse_core::source::{self, FetchOutcome};
+use pulse_core::updater;
 
 use crate::store::{Role, Settings, Store};
 use crate::theme;
@@ -302,6 +301,17 @@ pub(crate) struct PulseApp {
     pub(crate) confirm_reset: bool,
 
     applied_theme: (bool, u32),
+
+    // ── обновление приложения ───────────────────────────────────────────────
+
+    /// Информация о доступном обновлении (None — не проверяли или нет).
+    pub(crate) update_available: Option<updater::UpdateInfo>,
+    /// Канал для получения результата фоновой проверки.
+    pub(crate) update_rx: Option<mpsc::Receiver<Result<Option<updater::UpdateInfo>, String>>>,
+    /// Проверка обновлений сейчас в процессе.
+    pub(crate) update_check_active: bool,
+    /// Флаг выхода: приложение готовится к перезапуску с обновлением.
+    pub(crate) running: bool,
 }
 
 impl PulseApp {
@@ -382,6 +392,10 @@ impl PulseApp {
             shortened_input: String::new(),
             confirm_reset: false,
             applied_theme,
+            update_available: None,
+            update_rx: None,
+            update_check_active: false,
+            running: true,
         };
 
         if let Some(warning) = warning {
@@ -404,6 +418,9 @@ impl PulseApp {
             app.start_fetch();
         }
 
+        // Фоновая проверка обновления приложения (если включено).
+        app.schedule_update_check();
+
         app
     }
 
@@ -415,6 +432,11 @@ impl PulseApp {
 
     pub(crate) fn now(&self) -> NaiveTime {
         Local::now().time()
+    }
+
+    /// Текущее Unix-время (для меток автообновления, как `last_fetch_at`).
+    pub(crate) fn now_unix(&self) -> i64 {
+        Local::now().timestamp()
     }
 
     pub(crate) fn set_status(&mut self, kind: StatusKind, text: impl Into<String>) {
@@ -1517,6 +1539,11 @@ fn wrap_card(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui)) {
 
 impl eframe::App for PulseApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        // При обновлении приложения процесс выходит, а скрипт заменяет файл.
+        if !self.running {
+            ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
+            return;
+        }
         self.draw(ui);
     }
 }
@@ -1530,6 +1557,7 @@ impl PulseApp {
         let ctx = ui.ctx().clone();
         views::set_animations(&ctx, self.animations);
         self.poll_fetch();
+        self.poll_update_check();
         self.handle_shortcuts(&ctx);
 
         // Роль могли сменить в другом окне или из старого файла настроек:
@@ -1588,6 +1616,8 @@ impl PulseApp {
             .exact_size(self.nav_width() + 24.0)
             .show(ui, |ui| {
                 self.ui_nav(ui);
+                ui.allocate_space(ui.available_size());
+                self.ui_update_banner(ui);
             });
 
         egui::CentralPanel::default().show(ui, |ui| {

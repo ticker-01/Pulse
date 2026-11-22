@@ -328,3 +328,102 @@ jobs:
             pulse-desktop/mgkap-macos-*.zip
             pulse-desktop/mgkap-macos-*.dmg
           if-no-files-found: error
+
+  publish:
+    name: Публикация в mgkap-dist
+    needs: [linux, windows, macos]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Получить токен (проверка)
+        env:
+          TOKEN: ${{ secrets.DIST_TOKEN }}
+        run: |
+          if [ -z "$TOKEN" ]; then
+            echo "::error::Секрет DIST_TOKEN не задан. Создай PAT → Settings → Secrets → добавить DIST_TOKEN"
+            exit 1
+          fi
+
+      - uses: actions/checkout@v7
+        with:
+          repository: ticker-01/mgkap-dist
+          token: ${{ secrets.DIST_TOKEN }}
+
+      - uses: actions/download-artifact@v7
+        with:
+          pattern: mgkap-*
+          path: _artifacts
+          merge-multiple: true
+
+      - name: Собрать файлы и latest.json
+        run: |
+          set -euo pipefail
+          mkdir -p windows macos linux
+
+          # Windows
+          if [ -f _artifacts/mgkap.exe ]; then
+            cp _artifacts/mgkap.exe windows/mgkap.exe
+            SHA=$(sha256sum windows/mgkap.exe | cut -d' ' -f1)
+            echo "WINDOWS_URL=https://raw.githubusercontent.com/ticker-01/mgkap-dist/main/windows/mgkap.exe" >> "$GITHUB_ENV"
+            echo "WINDOWS_SHA=$SHA" >> "$GITHUB_ENV"
+          fi
+
+          # macOS
+          for f in _artifacts/mgkap-macos-universal.zip _artifacts/mgkap-macos-universal.dmg; do
+            [ -f "$f" ] && cp "$f" macos/
+          done
+          if [ -f macos/mgkap-macos-universal.zip ]; then
+            SHA=$(sha256sum macos/mgkap-macos-universal.zip | cut -d' ' -f1)
+            echo "MACOS_URL=https://raw.githubusercontent.com/ticker-01/mgkap-dist/main/macos/mgkap-macos-universal.zip" >> "$GITHUB_ENV"
+            echo "MACOS_SHA=$SHA" >> "$GITHUB_ENV"
+          fi
+
+          # Linux
+          if [ -f _artifacts/mgkap-linux-x86_64.tar.gz ]; then
+            cp _artifacts/mgkap-linux-x86_64.tar.gz linux/
+            SHA=$(sha256sum linux/mgkap-linux-x86_64.tar.gz | cut -d' ' -f1)
+            echo "LINUX_URL=https://raw.githubusercontent.com/ticker-01/mgkap-dist/main/linux/mgkap-linux-x86_64.tar.gz" >> "$GITHUB_ENV"
+            echo "LINUX_SHA=$SHA" >> "$GITHUB_ENV"
+          fi
+
+          # Версия из тега (v0.1.0 → 0.1.0)
+          VERSION="${GITHUB_REF_NAME#v}"
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+          echo "DATE=$(date -u +%Y-%m-%d)" >> "$GITHUB_ENV"
+
+      - name: Сгенерировать latest.json
+        run: |
+          jq -n \
+            --arg ver "$VERSION" \
+            --arg date "$DATE" \
+            --arg win_url "$WINDOWS_URL" \
+            --arg win_sha "$WINDOWS_SHA" \
+            --arg mac_url "$MACOS_URL" \
+            --arg mac_sha "$MACOS_SHA" \
+            --arg lin_url "$LINUX_URL" \
+            --arg lin_sha "$LINUX_SHA" \
+            '{
+              version: $ver,
+              date: $date,
+              windows: (if $win_url == "" then null else {url: $win_url, sha256: $win_sha} end),
+              macos: (if $mac_url == "" then null else {
+                universal: {url: $mac_url, sha256: $mac_sha},
+                aarch64: null,
+                x86_64: null
+              } end),
+              linux: (if $lin_url == "" then null else {url: $lin_url, sha256: $lin_sha} end)
+            }' > latest.json
+          cat latest.json
+
+      - name: Закоммитить и запушить
+        run: |
+          git config user.name "mgkap-bot"
+          git config user.email "bot@mgkap.by"
+          git add -A
+          if git diff --cached --quiet; then
+            echo "нет изменений — пропускаем"
+            exit 0
+          fi
+          git commit -m "релиз $VERSION от $DATE"
+          git push

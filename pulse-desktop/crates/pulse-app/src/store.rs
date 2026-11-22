@@ -52,6 +52,10 @@ pub struct Settings {
     pub teacher_name: String,
     /// Когда расписание последний раз скачивалось с сайта (Unix-время, 0 — ни разу).
     pub last_fetch_at: i64,
+    /// Автоматически проверять обновления приложения.
+    pub auto_update_app: bool,
+    /// Когда последний раз проверяли обновление приложения (Unix-время).
+    pub last_update_check_ts: i64,
 }
 
 impl Default for Settings {
@@ -68,6 +72,8 @@ impl Default for Settings {
             role: Role::Student,
             teacher_name: String::new(),
             last_fetch_at: 0,
+            auto_update_app: true,
+            last_update_check_ts: 0,
         }
     }
 }

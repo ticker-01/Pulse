@@ -237,7 +237,9 @@ object LiveNotificationManager {
             return
         }
 
-        val jsonString = prefs.getString("widget_lessons_today", "[]") ?: "[]"
+        val isTeacherMode = prefs.getBoolean("is_teacher_mode", false)
+        val jsonKey = if (isTeacherMode) "widget_teacher_lessons_today" else "widget_lessons_today"
+        val jsonString = prefs.getString(jsonKey, "[]") ?: "[]"
         val lessons = mutableListOf<LessonPair>()
         try {
             val array = JSONArray(jsonString)
@@ -251,7 +253,8 @@ object LiveNotificationManager {
                         endTime = obj.optString("endTime", ""),
                         subject = obj.optString("subject", "").substringBefore(" (").trim(),
                         room = obj.optString("room", "—"),
-                        teacher = obj.optString("teacher", "—")
+                        teacher = obj.optString("teacher", "—"),
+                        group = obj.optString("group", "—")
                     )
                 )
             }

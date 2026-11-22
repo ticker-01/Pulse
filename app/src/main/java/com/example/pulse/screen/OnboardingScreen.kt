@@ -26,6 +26,7 @@ import androidx.compose.material.icons.outlined.Lightbulb
 import androidx.compose.material.icons.outlined.Person
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -43,10 +44,12 @@ import androidx.compose.ui.layout.positionInRoot
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 import androidx.navigation.NavController
+import com.example.pulse.viewmodel.ScheduleViewModel
 import kotlinx.coroutines.delay
 import kotlin.math.sin
 import kotlin.math.sqrt
@@ -67,7 +70,13 @@ fun OnboardingScreen(navController: NavController) {
     var easterEggBoost by remember { mutableStateOf(false) }
     var secretTapCount by remember { mutableIntStateOf(0) }
 
+    // Teacher mode
+    var isTeacherMode by remember { mutableStateOf(false) }
+    var customTeacherName by remember { mutableStateOf("") }
+    var selectedTeacher by remember { mutableStateOf("") }
+
     val context = LocalContext.current
+    val scheduleViewModel: ScheduleViewModel = viewModel()
 
     LaunchedEffect(Unit) {
         notificationGranted = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
@@ -78,6 +87,8 @@ fun OnboardingScreen(navController: NavController) {
         } else {
             true
         }
+        // Preload teachers from cache
+        scheduleViewModel.refreshData()
     }
 
     fun completeOnboarding() {
@@ -88,9 +99,17 @@ fun OnboardingScreen(navController: NavController) {
         if (isGathering) {
             delay(1200L)
             val prefs = context.getSharedPreferences("PulseAppPrefs", Context.MODE_PRIVATE)
+            val teacherName = if (isTeacherMode) {
+                if (customTeacherName.isNotBlank()) customTeacherName else selectedTeacher
+            } else ""
             prefs.edit().apply {
-                putString("user_name", name.ifBlank { "Студент" })
-                putString("user_group", group.ifBlank { "Без группы" })
+                putString("user_name", name.ifBlank { if (isTeacherMode) "Преподаватель" else "Студент" })
+                putBoolean("is_teacher_mode", isTeacherMode)
+                if (isTeacherMode) {
+                    putString("teacher_name", teacherName.ifBlank { "Преподаватель" })
+                } else {
+                    putString("user_group", group.ifBlank { "Без группы" })
+                }
                 putBoolean("onboarding_completed", true)
                 putBoolean("notifications_asked", true)
                 apply()
@@ -221,7 +240,12 @@ fun OnboardingScreen(navController: NavController) {
                     label = "OnboardingContent"
                 ) { step ->
                     when (step) {
-                        0 -> StepContentUI(
+                        0 -> RoleSelectionStep(
+                            isTeacherMode = isTeacherMode,
+                            onRoleChange = { isTeacherMode = it },
+                            onRingPositioned = { ringCenter = it }
+                        )
+                        1 -> StepContentUI(
                             icon = Icons.Default.WavingHand,
                             title = "Добро пожаловать!",
                             description = "Давай познакомимся. Как к тебе обращаться?",
@@ -236,7 +260,14 @@ fun OnboardingScreen(navController: NavController) {
                                 easterEggBoost = true
                             }
                         )
-                        1 -> StepContentUI(
+                        2 -> if (isTeacherMode) TeacherStepContent(
+                            customTeacherName = customTeacherName,
+                            onCustomNameChange = { customTeacherName = it },
+                            selectedTeacher = selectedTeacher,
+                            onTeacherSelected = { selectedTeacher = it; customTeacherName = "" },
+                            onRingPositioned = { ringCenter = it },
+                            scheduleViewModel = scheduleViewModel
+                        ) else StepContentUI(
                             icon = Icons.Default.School,
                             title = "Твоя группа",
                             description = "Укажи свою учебную группу, чтобы мы загрузили актуальное расписание.",
@@ -251,7 +282,7 @@ fun OnboardingScreen(navController: NavController) {
                                 easterEggBoost = true
                             }
                         )
-                        2 -> StepContentUI(
+                        3 -> StepContentUI(
                             icon = Icons.Default.NotificationsActive,
                             title = "Будь в курсе",
                             description = "Разреши уведомления, чтобы мы могли напоминать о парах и предупреждать об отменах.",
@@ -298,7 +329,7 @@ fun OnboardingScreen(navController: NavController) {
             Button(
                 onClick = {
                     when {
-                        currentStep < 2 -> currentStep++
+                        currentStep < 3 -> currentStep++
                         else -> requestNotificationAndFinish()
                     }
                 },
@@ -323,7 +354,7 @@ fun OnboardingScreen(navController: NavController) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Text(
                             text = when {
-                                currentStep < 2 -> "Далее"
+                                currentStep < 3 -> "Далее"
                                 else -> "Разрешить и начать"
                             },
                             color = Color.White,
@@ -332,7 +363,7 @@ fun OnboardingScreen(navController: NavController) {
                         )
                         Spacer(modifier = Modifier.width(8.dp))
                         Icon(
-                            imageVector = if (currentStep < 2) Icons.Default.ArrowForward
+                            imageVector = if (currentStep < 3) Icons.Default.ArrowForward
                             else Icons.Default.NotificationsActive,
                             contentDescription = null,
                             tint = Color.White,
@@ -342,7 +373,7 @@ fun OnboardingScreen(navController: NavController) {
                 }
             }
 
-            if (currentStep == 2) {
+            if (currentStep == 3) {
                 Spacer(modifier = Modifier.height(10.dp))
                 TextButton(
                     onClick = { completeOnboarding() },
@@ -700,6 +731,412 @@ fun AnimatedConstellationBackground(
                     }
                 }
             }
+        }
+    }
+}
+@Composable
+fun RoleSelectionStep(
+    isTeacherMode: Boolean,
+    onRoleChange: (Boolean) -> Unit,
+    onRingPositioned: (Offset) -> Unit
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .verticalScroll(rememberScrollState())
+            .padding(vertical = 12.dp),
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        Box(
+            contentAlignment = Alignment.Center,
+            modifier = Modifier
+                .size(140.dp)
+                .onGloballyPositioned { coordinates ->
+                    val center = coordinates.positionInRoot() + Offset(
+                        coordinates.size.width / 2f,
+                        coordinates.size.height / 2f
+                    )
+                    onRingPositioned(center)
+                }
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(130.dp)
+                    .border(1.dp, PrimaryPurple.copy(alpha = 0.35f), CircleShape)
+            )
+            Box(
+                modifier = Modifier
+                    .size(100.dp)
+                    .background(PrimaryPurple.copy(alpha = 0.16f), CircleShape)
+                    .border(2.dp, PrimaryPurple, CircleShape)
+            )
+            Icon(
+                imageVector = Icons.Default.AccountCircle,
+                contentDescription = null,
+                tint = PrimaryPurple,
+                modifier = Modifier.size(48.dp)
+            )
+            Box(
+                modifier = Modifier
+                    .size(5.dp)
+                    .background(Color.White, CircleShape)
+                    .align(Alignment.TopCenter)
+                    .offset(y = 15.dp)
+            )
+            Box(
+                modifier = Modifier
+                    .size(5.dp)
+                    .background(PrimaryPurple, CircleShape)
+                    .align(Alignment.BottomEnd)
+                    .offset(x = (-20).dp, y = (-20).dp)
+            )
+        }
+
+        Spacer(modifier = Modifier.height(28.dp))
+
+        Text(
+            text = "Кто вы?",
+            color = Color.White,
+            fontSize = 26.sp,
+            fontWeight = FontWeight.Bold,
+            textAlign = TextAlign.Center
+        )
+
+        Spacer(modifier = Modifier.height(10.dp))
+
+        Text(
+            text = "Выберите роль — это изменит интерфейс и функции приложения",
+            color = TextGray,
+            fontSize = 14.sp,
+            textAlign = TextAlign.Center,
+            lineHeight = 20.sp,
+            modifier = Modifier.padding(horizontal = 8.dp)
+        )
+
+        Spacer(modifier = Modifier.height(28.dp))
+
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            RoleCard(
+                title = "Студент",
+                subtitle = "Расписание, оценки, уведомления",
+                icon = Icons.Default.School,
+                isSelected = !isTeacherMode,
+                onClick = { onRoleChange(false) }
+            )
+            RoleCard(
+                title = "Преподаватель",
+                subtitle = "Моё расписание, нагрузка, группы",
+                icon = Icons.Default.Person,
+                isSelected = isTeacherMode,
+                onClick = { onRoleChange(true) }
+            )
+        }
+    }
+}
+
+@Composable
+fun RoleCard(
+    title: String,
+    subtitle: String,
+    icon: ImageVector,
+    isSelected: Boolean,
+    onClick: () -> Unit
+) {
+    val backgroundColor by animateColorAsState(
+        targetValue = if (isSelected) PrimaryPurple else SurfaceDark,
+        animationSpec = tween(300),
+        label = "roleCardBg"
+    )
+    val borderColor by animateColorAsState(
+        targetValue = if (isSelected) PrimaryPurple else PrimaryPurple.copy(alpha = 0.2f),
+        animationSpec = tween(300),
+        label = "roleCardBorder"
+    )
+    val textColor by animateColorAsState(
+        targetValue = if (isSelected) Color.White else Color.White,
+        animationSpec = tween(300),
+        label = "roleCardText"
+    )
+    val subTextColor by animateColorAsState(
+        targetValue = if (isSelected) Color.White.copy(alpha = 0.9f) else TextGray,
+        animationSpec = tween(300),
+        label = "roleCardSubText"
+    )
+
+    Card(
+        shape = RoundedCornerShape(20.dp),
+        colors = CardDefaults.cardColors(containerColor = backgroundColor),
+        border = BorderStroke(2.dp, borderColor),
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(140.dp)
+            .clickable { onClick() }
+            .padding(16.dp),
+    ) {
+        Column(
+            modifier = Modifier.fillMaxSize(),
+            verticalArrangement = Arrangement.Center,
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            Icon(
+                imageVector = icon,
+                contentDescription = null,
+                tint = if (isSelected) Color.White else PrimaryPurple,
+                modifier = Modifier.size(36.dp)
+            )
+            Spacer(modifier = Modifier.height(12.dp))
+            Text(
+                text = title,
+                color = textColor,
+                fontSize = 18.sp,
+                fontWeight = FontWeight.Bold,
+                textAlign = TextAlign.Center
+            )
+            Spacer(modifier = Modifier.height(4.dp))
+            Text(
+                text = subtitle,
+                color = subTextColor,
+                fontSize = 12.sp,
+                textAlign = TextAlign.Center,
+                maxLines = 2
+            )
+        }
+    }
+}
+
+@Composable
+fun TeacherStepContent(
+    customTeacherName: String,
+    onCustomNameChange: (String) -> Unit,
+    selectedTeacher: String,
+    onTeacherSelected: (String) -> Unit,
+    onRingPositioned: (Offset) -> Unit,
+    scheduleViewModel: ScheduleViewModel
+) {
+    val cachedTeachers = scheduleViewModel.state.value.teachers
+    val hasCachedTeachers = cachedTeachers.isNotEmpty()
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .verticalScroll(rememberScrollState())
+            .padding(vertical = 12.dp),
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        Box(
+            contentAlignment = Alignment.Center,
+            modifier = Modifier
+                .size(140.dp)
+                .onGloballyPositioned { coordinates ->
+                    val center = coordinates.positionInRoot() + Offset(
+                        coordinates.size.width / 2f,
+                        coordinates.size.height / 2f
+                    )
+                    onRingPositioned(center)
+                }
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(130.dp)
+                    .border(1.dp, PrimaryPurple.copy(alpha = 0.35f), CircleShape)
+            )
+            Box(
+                modifier = Modifier
+                    .size(100.dp)
+                    .background(PrimaryPurple.copy(alpha = 0.16f), CircleShape)
+                    .border(2.dp, PrimaryPurple, CircleShape)
+            )
+            Icon(
+                imageVector = Icons.Default.School,
+                contentDescription = null,
+                tint = PrimaryPurple,
+                modifier = Modifier.size(48.dp)
+            )
+            Box(
+                modifier = Modifier
+                    .size(5.dp)
+                    .background(Color.White, CircleShape)
+                    .align(Alignment.TopCenter)
+                    .offset(y = 15.dp)
+            )
+            Box(
+                modifier = Modifier
+                    .size(5.dp)
+                    .background(PrimaryPurple, CircleShape)
+                    .align(Alignment.BottomEnd)
+                    .offset(x = (-20).dp, y = (-20).dp)
+            )
+        }
+
+        Spacer(modifier = Modifier.height(28.dp))
+
+        Text(
+            text = "Как к вам обращаться?",
+            color = Color.White,
+            fontSize = 26.sp,
+            fontWeight = FontWeight.Bold,
+            textAlign = TextAlign.Center
+        )
+
+        Spacer(modifier = Modifier.height(10.dp))
+
+        Text(
+            text = if (hasCachedTeachers) {
+                "Выберите себя из списка или введите вручную"
+            } else {
+                "Загружаем список преподавателей... Можно ввести вручную"
+            },
+            color = TextGray,
+            fontSize = 14.sp,
+            textAlign = TextAlign.Center,
+            lineHeight = 20.sp,
+            modifier = Modifier.padding(horizontal = 8.dp)
+        )
+
+        Spacer(modifier = Modifier.height(28.dp))
+
+        OutlinedTextField(
+            value = customTeacherName,
+            onValueChange = onCustomNameChange,
+            label = {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(
+                        imageVector = Icons.Outlined.Person,
+                        contentDescription = null,
+                        modifier = Modifier.size(16.dp),
+                        tint = PrimaryPurple
+                    )
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text(text = "Имя преподавателя", color = PrimaryPurple)
+                }
+            },
+            placeholder = { Text("Например: Иванов И.И.", color = TextGray.copy(alpha = 0.7f)) },
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(16.dp),
+            colors = OutlinedTextFieldDefaults.colors(
+                focusedTextColor = Color.White,
+                unfocusedTextColor = Color.White,
+                focusedBorderColor = PrimaryPurple,
+                unfocusedBorderColor = SurfaceDark,
+                focusedContainerColor = SurfaceDark,
+                unfocusedContainerColor = SurfaceDark.copy(alpha = 0.7f),
+                cursorColor = PrimaryPurple
+            )
+        )
+
+        Spacer(modifier = Modifier.height(16.dp))
+
+        // Quick pick from cached list
+        if (hasCachedTeachers) {
+            Column(
+                modifier = Modifier.fillMaxWidth(),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                cachedTeachers.take(6).forEach { teacher ->
+                    val isSelected = selectedTeacher == teacher.name
+                    Card(
+                        shape = RoundedCornerShape(14.dp),
+                        colors = CardDefaults.cardColors(
+                            containerColor = if (isSelected) PrimaryPurple.copy(alpha = 0.2f) else SurfaceDark
+                        ),
+                        border = BorderStroke(
+                            1.dp,
+                            if (isSelected) PrimaryPurple else PrimaryPurple.copy(alpha = 0.15f)
+                        ),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { onTeacherSelected(teacher.name) }
+                            .padding(horizontal = 4.dp)
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(16.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .size(40.dp)
+                                    .background(PrimaryPurple.copy(alpha = 0.15f), CircleShape),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Text(
+                                    text = teacher.name.split(" ")
+                                        .filter { it.isNotBlank() }
+                                        .take(2)
+                                        .map { it.first().uppercase() }
+                                        .joinToString(""),
+                                    color = PrimaryPurple,
+                                    fontSize = 14.sp,
+                                    fontWeight = FontWeight.Bold
+                                )
+                            }
+                            Spacer(modifier = Modifier.width(12.dp))
+                            Column(modifier = Modifier.weight(1f, fill = false)) {
+                                Text(
+                                    text = teacher.name,
+                                    color = Color.White,
+                                    fontSize = 15.sp,
+                                    fontWeight = FontWeight.Medium
+                                )
+                                if (teacher.subject.isNotBlank()) {
+                                    Text(
+                                        text = teacher.subject,
+                                        color = TextGray,
+                                        fontSize = 11.sp,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                }
+                            }
+                            if (isSelected) {
+                                Icon(
+                                    imageVector = Icons.Default.CheckCircle,
+                                    contentDescription = null,
+                                    tint = PrimaryPurple,
+                                    modifier = Modifier.size(24.dp)
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+            Spacer(modifier = Modifier.height(8.dp))
+            Text(
+                text = "Не нашли себя? Введите имя вручную выше ⬆️",
+                color = TextGray.copy(alpha = 0.7f),
+                fontSize = 11.sp,
+                textAlign = TextAlign.Center
+            )
+        }
+
+        Spacer(modifier = Modifier.height(14.dp))
+
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 4.dp),
+            verticalAlignment = Alignment.Top
+        ) {
+            Icon(
+                imageVector = Icons.Outlined.Lightbulb,
+                contentDescription = null,
+                tint = PrimaryPurple.copy(alpha = 0.7f),
+                modifier = Modifier.size(18.dp)
+            )
+            Spacer(modifier = Modifier.width(10.dp))
+            Text(
+                text = if (hasCachedTeachers) {
+                    "Список взят из загруженного расписания. Если вас нет — введите вручную."
+                } else {
+                    "Расписание загружается в фоне. Список появится автоматически."
+                },
+                color = TextGray,
+                fontSize = 12.sp,
+                lineHeight = 16.sp
+            )
         }
     }
 }

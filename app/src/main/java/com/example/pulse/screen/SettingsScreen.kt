@@ -4,6 +4,7 @@ import android.content.Context
 import android.content.SharedPreferences
 import android.os.Build
 import android.widget.Toast
+import com.example.pulse.viewmodel.ScheduleViewModel
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.*
@@ -27,6 +28,7 @@ import androidx.compose.material.icons.outlined.*
 import androidx.compose.material3.*
 import androidx.compose.material3.TabRowDefaults.tabIndicatorOffset
 import androidx.compose.runtime.*
+import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -66,6 +68,12 @@ fun SettingsScreen(navController: NavController) {
     val prefs = remember { context.getSharedPreferences("PulseAppPrefs", Context.MODE_PRIVATE) }
     val coroutineScope = rememberCoroutineScope()
     val haptic = LocalHapticFeedback.current
+    val viewModel: ScheduleViewModel = viewModel()
+
+    val isTeacherMode = prefs.getBoolean("is_teacher_mode", false)
+    val teacherName = prefs.getString("teacher_name", "") ?: ""
+    var isTeacherModeVar by remember { mutableStateOf(isTeacherMode) }
+    var teacherNameVar by remember { mutableStateOf(teacherName) }
 
     var userName by remember { mutableStateOf(prefs.getString("user_name", "Студент") ?: "Студент") }
     var userGroup by remember { mutableStateOf(prefs.getString("user_group", "000") ?: "000") }
@@ -128,9 +136,14 @@ fun SettingsScreen(navController: NavController) {
     )
 
     fun saveSettings() {
+        val wasTeacherMode = prefs.getBoolean("is_teacher_mode", false)
+        val oldTeacherName = prefs.getString("teacher_name", "") ?: ""
+
         prefs.edit()
             .putString("user_name", userName)
             .putString("user_group", userGroup)
+            .putBoolean("is_teacher_mode", isTeacherModeVar)
+            .putString("teacher_name", teacherNameVar)
             .putBoolean("dynamic_color_enabled", dynamicColorEnabled)
             .putBoolean("lesson_reminders_enabled", remindersEnabled)
             .putInt("reminder_offset_minutes", reminderOffset)
@@ -142,6 +155,11 @@ fun SettingsScreen(navController: NavController) {
             .apply()
 
         prefs.edit().remove("last_auto_alarm_state").apply()
+
+        // Update teacher widget data if teacher mode is enabled
+        if (isTeacherModeVar && teacherNameVar.isNotBlank()) {
+            viewModel.updateTeacherWidgetData(teacherNameVar)
+        }
 
         if (autoAlarmEnabled) {
             SystemAlarmHelper.triggerAutoAlarmNow(context)
@@ -196,16 +214,54 @@ fun SettingsScreen(navController: NavController) {
                     ), modifier = Modifier.fillMaxWidth(), singleLine = true
                 )
                 Spacer(modifier = Modifier.height(12.dp))
-                OutlinedTextField(
-                    value = userGroup, onValueChange = { userGroup = it },
-                    label = { Text("Учебная группа (например, 000)", color = TextGray) },
-                    shape = RoundedCornerShape(14.dp),
-                    colors = OutlinedTextFieldDefaults.colors(
-                        focusedTextColor = Color.White, unfocusedTextColor = Color.White,
-                        focusedBorderColor = PrimaryPurple, unfocusedBorderColor = PrimaryPurple.copy(alpha = 0.25f),
-                        focusedContainerColor = SurfaceDark, unfocusedContainerColor = SurfaceDark
-                    ), modifier = Modifier.fillMaxWidth(), singleLine = true
-                )
+
+                // Teacher mode toggle
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column {
+                        Text("Режим преподавателя", color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.Medium)
+                        Text("Просмотр расписания и аналитика для учителей", color = TextGray, fontSize = 12.sp)
+                    }
+                    Switch(
+                        checked = isTeacherModeVar,
+                        onCheckedChange = { isChecked ->
+                            isTeacherModeVar = isChecked
+                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                        },
+                        colors = SwitchDefaults.colors(checkedTrackColor = PrimaryPurple)
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(12.dp))
+
+                if (isTeacherModeVar) {
+                    // Teacher name field
+                    OutlinedTextField(
+                        value = teacherNameVar, onValueChange = { teacherNameVar = it },
+                        label = { Text("Ваше имя (ФИО преподавателя)", color = TextGray) },
+                        shape = RoundedCornerShape(14.dp),
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedTextColor = Color.White, unfocusedTextColor = Color.White,
+                            focusedBorderColor = PrimaryPurple, unfocusedBorderColor = PrimaryPurple.copy(alpha = 0.25f),
+                            focusedContainerColor = SurfaceDark, unfocusedContainerColor = SurfaceDark
+                        ), modifier = Modifier.fillMaxWidth(), singleLine = true
+                    )
+                } else {
+                    // Student group field
+                    OutlinedTextField(
+                        value = userGroup, onValueChange = { userGroup = it },
+                        label = { Text("Учебная группа (например, 000)", color = TextGray) },
+                        shape = RoundedCornerShape(14.dp),
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedTextColor = Color.White, unfocusedTextColor = Color.White,
+                            focusedBorderColor = PrimaryPurple, unfocusedBorderColor = PrimaryPurple.copy(alpha = 0.25f),
+                            focusedContainerColor = SurfaceDark, unfocusedContainerColor = SurfaceDark
+                        ), modifier = Modifier.fillMaxWidth(), singleLine = true
+                    )
+                }
 
                 Spacer(modifier = Modifier.height(24.dp))
 

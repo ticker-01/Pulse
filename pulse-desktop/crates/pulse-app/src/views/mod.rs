@@ -8,6 +8,7 @@ pub(crate) mod performance;
 pub(crate) mod schedule;
 pub(crate) mod settings;
 pub(crate) mod teachers;
+pub(crate) mod update;
 
 use eframe::egui;
 use pulse_core::performance::{

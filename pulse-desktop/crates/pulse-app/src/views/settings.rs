@@ -298,6 +298,53 @@ impl PulseApp {
             ui.hyperlink_to("Страница расписания колледжа", pulse_core::PAGE_URL);
         });
 
+        // ── обновление приложения ────────────────────────────────────────────
+        section_title(ui, "Обновление приложения");
+        card(ui, |ui| {
+            dirty |= ui
+                .checkbox(
+                    &mut self.settings.auto_update_app,
+                    "Автоматически проверять обновления",
+                )
+                .on_hover_text("Раз в сутки проверять новую версию на GitHub")
+                .changed();
+
+            ui.add_space(2.0);
+            let last = last_fetch_label(self.settings.last_update_check_ts);
+            muted(ui, format!("Последняя проверка: {last}"));
+
+            ui.horizontal(|ui| {
+                let busy = self.update_check_active;
+                if ui
+                    .add_enabled(!busy, egui::Button::new("⟳ Проверить сейчас"))
+                    .clicked()
+                {
+                    self.trigger_update_check();
+                }
+                if busy {
+                    ui.spinner();
+                    muted(ui, "проверка…");
+                }
+            });
+
+            if let Some(info) = &self.update_available {
+                let version = info.version.clone();
+                ui.add_space(4.0);
+                let accent = theme::color(self.settings.accent);
+                ui.label(
+                    egui::RichText::new(format!("📦 Версия {} доступна", version))
+                        .size(13.0)
+                        .color(accent),
+                );
+                if ui
+                    .button("Обновить и перезапустить")
+                    .clicked()
+                {
+                    self.upgrade_to(&version);
+                }
+            }
+        });
+
         // ── звонки ──────────────────────────────────────────────────────────
         section_title(ui, "Звонки");
         card(ui, |ui| {
@@ -467,6 +514,24 @@ impl PulseApp {
                 ui,
                 "Данные Android-версии лежат в JSON с теми же именами полей — файлы можно перенести вручную.",
             );
+            ui.add_space(6.0);
+            ui.horizontal(|ui| {
+                let busy = self.update_check_active;
+                if ui
+                    .add_enabled(!busy, egui::Button::new("⟳ Проверить обновления"))
+                    .on_hover_text(if self.settings.auto_update_app {
+                        "Автоматическая проверка включена"
+                    } else {
+                        "Автоматическая проверка отключена в настройках"
+                    })
+                    .clicked()
+                {
+                    self.trigger_update_check();
+                }
+                if busy {
+                    ui.spinner();
+                }
+            });
         });
 
         // ── применение собранных действий ───────────────────────────────────

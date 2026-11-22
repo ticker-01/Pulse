@@ -16,12 +16,17 @@ pub mod performance;
 pub mod source;
 pub mod storage;
 pub mod subject_theme;
+pub mod updater;
 
 pub use bells::{BellConfig, BellDay, BellSlot};
 pub use changes::{diff_schedules, ChangeKind, LessonBrief, ScheduleChange};
 pub use homework::HomeworkItem;
 pub use model::{now_lessons, LessonPair, ScheduleCache, Teacher};
 pub use performance::{Semester, SubjectGrade};
+pub use updater::{
+    check_from_body, current_version, download_and_verify, fetch_and_check, os_label,
+    MacosAssets, PlatformAsset, UpdateInfo, UpdateManifest,
+};
 
 /// Адрес страницы с заменами в расписании колледжа.
 pub const PAGE_URL: &str = source::PAGE_URL;

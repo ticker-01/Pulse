@@ -269,6 +269,14 @@ class ScheduleViewModel(application: Application) : AndroidViewModel(application
         val activeCache = if (_state.value.previewGroup != null) previewScheduleCache else scheduleCache
         _state.update { it.copy(selectedDate = today, lessons = activeCache[today] ?: emptyList(), isLoading = false) }
         updateWidgetData(scheduleCache)
+        // Update teacher widget data if teacher mode is enabled
+        val prefs = getApplication<Application>().applicationContext.getSharedPreferences("PulseAppPrefs", Context.MODE_PRIVATE)
+        if (prefs.getBoolean("is_teacher_mode", false)) {
+            val teacherName = prefs.getString("teacher_name", "") ?: ""
+            if (teacherName.isNotBlank()) {
+                updateTeacherWidgetData(teacherName)
+            }
+        }
     }
 
     private suspend fun fetchAllPdfUrls(): List<String> = withContext(Dispatchers.IO) {
@@ -352,6 +360,14 @@ class ScheduleViewModel(application: Application) : AndroidViewModel(application
         if (activeCache.isNotEmpty()) {
             _state.update { it.copy(selectedDate = today, lessons = activeCache[today] ?: emptyList(), isLoading = false) }
             updateWidgetData(scheduleCache)
+            // Update teacher widget data if teacher mode is enabled
+            val prefs = getApplication<Application>().applicationContext.getSharedPreferences("PulseAppPrefs", Context.MODE_PRIVATE)
+            if (prefs.getBoolean("is_teacher_mode", false)) {
+                val teacherName = prefs.getString("teacher_name", "") ?: ""
+                if (teacherName.isNotBlank()) {
+                    updateTeacherWidgetData(teacherName)
+                }
+            }
         } else {
             _state.update { it.copy(selectedDate = today, lessons = emptyList(), isLoading = false) }
         }
@@ -512,6 +528,28 @@ class ScheduleViewModel(application: Application) : AndroidViewModel(application
         } catch (e: Exception) {
             Log.e("ScheduleViewModel", "Ошибка планирования будильников", e)
         }
+    }
+
+    @SuppressLint("NewApi")
+    fun updateTeacherWidgetData(teacherName: String) {
+        val teacherSchedule = getTeacherSchedule(teacherName)
+        val today = LocalDate.now()
+        val lessonsToday = teacherSchedule[today] ?: emptyList()
+        val jsonArray = JSONArray()
+        lessonsToday.forEach { lesson ->
+            val jsonObj = JSONObject().apply {
+                put("pairNumber", lesson.pairNumber)
+                put("lessons", lesson.lessons)
+                put("startTime", lesson.startTime)
+                put("endTime", lesson.endTime)
+                put("subject", lesson.subject)
+                put("room", lesson.room)
+                put("teacher", lesson.teacher)
+                put("group", lesson.group)
+            }
+            jsonArray.put(jsonObj)
+        }
+        prefs.edit().putString("widget_teacher_lessons_today", jsonArray.toString()).apply()
     }
 
     private fun isValidGroup(raw: String): Boolean {

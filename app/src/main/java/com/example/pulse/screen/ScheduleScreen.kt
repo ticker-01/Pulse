@@ -24,11 +24,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
-import androidx.compose.material.icons.outlined.BookmarkBorder
-import androidx.compose.material.icons.outlined.CheckCircle
-import androidx.compose.material.icons.outlined.Notifications
-import androidx.compose.material.icons.outlined.RadioButtonUnchecked
-import androidx.compose.material.icons.outlined.Share
+import androidx.compose.material.icons.outlined.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -38,6 +34,7 @@ import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -60,12 +57,13 @@ import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavController
-import com.example.pulse.utils.CustomTheme
 import com.example.pulse.data.HomeworkItem
 import com.example.pulse.data.HomeworkManager
+import com.example.pulse.data.TeacherNotesManager
 import com.example.pulse.viewmodel.LessonPair
 import com.example.pulse.utils.PulseStoryAnalyzer
 import com.example.pulse.utils.ScheduleImageGenerator
+import com.example.pulse.utils.CustomTheme
 import com.example.pulse.viewmodel.ScheduleViewModel
 import com.example.pulse.utils.StoriesViewer
 import com.example.pulse.utils.StoryAvatar
@@ -85,6 +83,531 @@ import java.util.Locale
 import java.util.UUID
 
 @Composable
+fun TeacherScheduleView(
+    navController: NavController,
+    teacherName: String,
+    viewModel: ScheduleViewModel,
+    state: com.example.pulse.viewmodel.ScheduleState
+) {
+    val context = LocalContext.current
+    val haptic = LocalHapticFeedback.current
+
+    val teacherSchedule = remember { viewModel.getTeacherSchedule(teacherName) }
+
+    var selectedDate by remember { mutableStateOf(LocalDate.now()) }
+
+    val totalLessons = remember(teacherSchedule) { teacherSchedule.values.sumOf { it.size } }
+    val uniqueGroups = remember(teacherSchedule) {
+        teacherSchedule.values.flatten()
+            .map { lesson ->
+                when {
+                    lesson.group.isNotBlank() && lesson.group != "—" -> lesson.group
+                    lesson.subject.contains("Гр.") -> lesson.subject.substringAfter("Гр.").substringBefore(")").trim()
+                    else -> ""
+                }
+            }
+            .filter { it.isNotBlank() && it != "—" }
+            .flatMap { it.split("/").map { g -> g.trim() } }
+            .filter { it.isNotBlank() && it != "—" }
+            .distinct()
+    }
+    val uniqueRooms = remember(teacherSchedule) {
+        teacherSchedule.values.flatten()
+            .map { it.room.trim() }
+            .filter { it.isNotBlank() && it != "—" }
+            .distinct()
+    }
+
+    val currentLessonInfo = remember(teacherSchedule, selectedDate) {
+        val now = LocalTime.now()
+        val todayLessons = teacherSchedule[selectedDate] ?: emptyList()
+        todayLessons.firstOrNull { lesson ->
+            val start = lesson.startLocalTime
+            val end = lesson.endLocalTime
+            if (start != null && end != null) {
+                (now.isAfter(start) || now == start) && now.isBefore(end)
+            } else false
+        }
+    }
+
+    val teacherInitials = remember(teacherName) {
+        teacherName.split(" ")
+            .filter { it.isNotBlank() }
+            .take(2)
+            .map { it.first().uppercase() }
+            .joinToString("")
+            .ifBlank { "П" }
+    }
+
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(BgDark)
+            .padding(horizontal = 16.dp),
+        verticalArrangement = Arrangement.spacedBy(18.dp)
+    ) {
+        Spacer(modifier = Modifier.height(16.dp))
+
+        Card(
+            shape = RoundedCornerShape(24.dp),
+            colors = CardDefaults.cardColors(containerColor = SurfaceDark),
+            border = BorderStroke(1.dp, PrimaryPurple.copy(alpha = 0.3f)),
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Column(modifier = Modifier.padding(18.dp)) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(58.dp)
+                            .background(
+                                brush = Brush.linearGradient(
+                                    listOf(PrimaryPurple, Color(0xFF9C27B0))
+                                ),
+                                shape = CircleShape
+                            ),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(
+                            text = teacherInitials,
+                            color = Color.White,
+                            fontSize = 22.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+
+                    Spacer(modifier = Modifier.width(16.dp))
+
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = teacherName,
+                            color = Color.White,
+                            fontSize = 19.sp,
+                            fontWeight = FontWeight.Bold,
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(
+                            text = "Преподаватель колледжа",
+                            color = TextGray,
+                            fontSize = 13.sp
+                        )
+                    }
+                }
+
+                if (currentLessonInfo != null && selectedDate == LocalDate.now()) {
+                    Spacer(modifier = Modifier.height(14.dp))
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .background(Color(0xFF00E676).copy(alpha = 0.12f), RoundedCornerShape(12.dp))
+                            .border(1.dp, Color(0xFF00E676).copy(alpha = 0.35f), RoundedCornerShape(12.dp))
+                            .padding(horizontal = 12.dp, vertical = 8.dp)
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(8.dp)
+                                .background(Color(0xFF00E676), CircleShape)
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        val currentGroup = when {
+                            currentLessonInfo.group.isNotBlank() && currentLessonInfo.group != "—" -> " Гр. ${currentLessonInfo.group}"
+                            currentLessonInfo.subject.contains("Гр.") -> " Гр. ${currentLessonInfo.subject.substringAfter("Гр.").substringBefore(")").trim()}"
+                            else -> ""
+                        }
+                        Text(
+                            text = "Сейчас: ${currentLessonInfo.cleanSubject}$currentGroup (ауд. ${currentLessonInfo.room})",
+                            color = Color(0xFF00E676),
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Medium,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(16.dp))
+                HorizontalDivider(color = PrimaryPurple.copy(alpha = 0.15f), thickness = 1.dp)
+                Spacer(modifier = Modifier.height(14.dp))
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    MetricBadge(
+                        label = "Всего пар",
+                        value = "$totalLessons",
+                        icon = Icons.Outlined.AutoStories,
+                        modifier = Modifier.weight(1f)
+                    )
+                    MetricBadge(
+                        label = "Группы",
+                        value = if (uniqueGroups.isNotEmpty()) uniqueGroups.size.toString() else "—",
+                        icon = Icons.Outlined.Groups,
+                        modifier = Modifier.weight(1f)
+                    )
+                    MetricBadge(
+                        label = "Кабинеты",
+                        value = if (uniqueRooms.isNotEmpty()) uniqueRooms.take(2).joinToString() else "—",
+                        icon = Icons.Outlined.MeetingRoom,
+                        modifier = Modifier.weight(1f)
+                    )
+                }
+            }
+        }
+
+        Column(
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            val dateFormatter = com.example.pulse.utils.DateTimeUtils.DATE_FORMATTER_DAY_MONTH
+            val today = LocalDate.now()
+            val sortedDates = teacherSchedule.keys.toMutableList().sorted()
+
+            if (sortedDates.isEmpty()) {
+                Card(
+                    shape = RoundedCornerShape(20.dp),
+                    colors = CardDefaults.cardColors(containerColor = SurfaceDark),
+                    border = BorderStroke(1.dp, PrimaryPurple.copy(alpha = 0.15f)),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 20.dp)
+                ) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(32.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(54.dp)
+                                .background(PrimaryPurple.copy(alpha = 0.15f), CircleShape),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(
+                                imageVector = Icons.Outlined.EventBusy,
+                                contentDescription = null,
+                                tint = PrimaryPurple,
+                                modifier = Modifier.size(28.dp)
+                            )
+                        }
+                        Spacer(modifier = Modifier.height(14.dp))
+                        Text(
+                            "У вас нет занятий",
+                            color = Color.White,
+                            fontSize = 16.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                        Spacer(modifier = Modifier.height(6.dp))
+                        Text(
+                            "В текущем загруженном расписании\nпар не найдено.",
+                            color = TextGray,
+                            fontSize = 13.sp,
+                            textAlign = TextAlign.Center,
+                            lineHeight = 18.sp
+                        )
+                    }
+                }
+            } else {
+                LaunchedEffect(teacherSchedule) {
+                    if (selectedDate !in teacherSchedule.keys) {
+                        val nextDate = teacherSchedule.keys.filter { !it.isBefore(today) }.minOrNull() ?: sortedDates.firstOrNull()
+                        nextDate?.let { selectedDate = it }
+                    }
+                }
+
+                LazyRow(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    items(sortedDates) { date ->
+                        val isSelected = date == selectedDate
+                        val isToday = date == today
+                        val isTomorrow = date == today.plusDays(1)
+
+                        Box(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(16.dp))
+                                .background(if (isSelected) PrimaryPurple else SurfaceDark)
+                                .border(1.dp, if (isSelected) PrimaryPurple else PrimaryPurple.copy(alpha = 0.2f), RoundedCornerShape(16.dp))
+                                .clickable { selectedDate = date }
+                                .padding(horizontal = 14.dp, vertical = 10.dp)
+                                .animateContentSize(),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                Text(
+                                    text = date.format(dateFormatter).replaceFirstChar { it.uppercase() }.take(6),
+                                    color = if (isSelected) Color.White else (if (isToday) PrimaryPurple else Color.White),
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.Bold
+                                )
+                                if (isToday || isTomorrow) {
+                                    Spacer(modifier = Modifier.height(2.dp))
+                                    Text(
+                                        text = if (isToday) "Сегодня" else "Завтра",
+                                        color = if (isSelected) Color.White.copy(alpha = 0.9f) else (if (isToday) PrimaryPurple else TextGray),
+                                        fontSize = 9.sp,
+                                        fontWeight = FontWeight.Medium
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+
+                val lessons = teacherSchedule[selectedDate] ?: emptyList()
+                val isToday = selectedDate == today
+
+                Card(
+                    shape = RoundedCornerShape(22.dp),
+                    colors = CardDefaults.cardColors(containerColor = SurfaceDark),
+                    border = BorderStroke(
+                        1.dp,
+                        if (isToday) PrimaryPurple.copy(alpha = 0.45f) else PrimaryPurple.copy(alpha = 0.2f)
+                    ),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(
+                        modifier = Modifier.padding(top = 18.dp, start = 16.dp, end = 16.dp, bottom = 6.dp)
+                    ) {
+                        lessons.forEachIndexed { index, lesson ->
+                            TeacherTimelineItem(
+                                lesson = lesson,
+                                nextLesson = lessons.getOrNull(index + 1),
+                                isLast = index == lessons.size - 1,
+                                isToday = isToday
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun MetricBadge(
+    label: String,
+    value: String,
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    modifier: Modifier = Modifier
+) {
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = modifier
+            .background(BgDark, RoundedCornerShape(12.dp))
+            .border(1.dp, PrimaryPurple.copy(alpha = 0.2f), RoundedCornerShape(12.dp))
+            .padding(horizontal = 8.dp, vertical = 8.dp)
+    ) {
+        Box(
+            modifier = Modifier
+                .size(24.dp)
+                .background(PrimaryPurple.copy(alpha = 0.15f), CircleShape),
+            contentAlignment = Alignment.Center
+        ) {
+            Icon(imageVector = icon, contentDescription = null, tint = PrimaryPurple, modifier = Modifier.size(13.dp))
+        }
+        Spacer(modifier = Modifier.width(6.dp))
+        Column(modifier = Modifier.weight(1f, fill = false)) {
+            Text(
+                text = label,
+                color = TextGray,
+                fontSize = 9.sp,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+            Text(
+                text = value,
+                color = Color.White,
+                fontSize = 12.sp,
+                fontWeight = FontWeight.Bold,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+        }
+    }
+}
+
+@Composable
+fun TeacherTimelineItem(
+    lesson: LessonPair,
+    nextLesson: LessonPair? = null,
+    isLast: Boolean,
+    isToday: Boolean
+) {
+    val isLiveNow = remember(lesson, isToday) {
+        if (!isToday) false
+        else {
+            val now = LocalTime.now()
+            val start = lesson.startLocalTime
+            val end = lesson.endLocalTime
+            if (start != null && end != null) (now.isAfter(start) || now == start) && now.isBefore(end)
+            else false
+        }
+    }
+
+    val isBreak = remember(lesson, nextLesson) {
+        if (nextLesson == null) false
+        else {
+            val end = lesson.endLocalTime
+            val nextStart = nextLesson.startLocalTime
+            if (end != null && nextStart != null) {
+                java.time.Duration.between(end, nextStart).toMinutes() >= 35
+            } else false
+        }
+    }
+
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .drawBehind {
+                if (!isLast) {
+                    val lineColor = if (isLiveNow) Color(0xFF00E676).copy(alpha = 0.5f) else PrimaryPurple.copy(alpha = 0.35f)
+                    val lineX = 48.dp.toPx() + 12.dp.toPx() + 18.dp.toPx()
+                    drawLine(
+                        color = lineColor,
+                        start = Offset(lineX, 36.dp.toPx()),
+                        end = Offset(lineX, size.height),
+                        strokeWidth = 2.dp.toPx(),
+                        pathEffect = if (isBreak) PathEffect.dashPathEffect(floatArrayOf(10f, 10f), 0f) else null
+                    )
+                }
+            }
+    ) {
+        Column(
+            horizontalAlignment = Alignment.End,
+            modifier = Modifier
+                .width(48.dp)
+                .padding(top = 4.dp)
+        ) {
+            Text(
+                lesson.startTime,
+                color = if (isLiveNow) Color(0xFF00E676) else Color.White,
+                fontSize = 13.sp,
+                fontWeight = FontWeight.Bold
+            )
+            Text(
+                lesson.endTime,
+                color = TextGray,
+                fontSize = 11.sp
+            )
+        }
+
+        Spacer(modifier = Modifier.width(12.dp))
+
+        Box(
+            modifier = Modifier.width(36.dp),
+            contentAlignment = Alignment.TopCenter
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(36.dp)
+                    .background(SurfaceDark, RoundedCornerShape(12.dp))
+                    .background(
+                        if (isLiveNow) Color(0xFF00E676).copy(alpha = 0.15f) else PrimaryPurple.copy(alpha = 0.2f),
+                        RoundedCornerShape(12.dp)
+                    )
+                    .border(
+                        1.dp,
+                        if (isLiveNow) Color(0xFF00E676) else PrimaryPurple.copy(alpha = 0.5f),
+                        RoundedCornerShape(12.dp)
+                    ),
+                contentAlignment = Alignment.Center
+            ) {
+                Text(
+                    text = lesson.pairNumber.toString(),
+                    color = if (isLiveNow) Color(0xFF00E676) else PrimaryPurple,
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 14.sp
+                )
+            }
+        }
+
+        Spacer(modifier = Modifier.width(14.dp))
+
+        Column(
+            modifier = Modifier
+                .weight(1f)
+                .padding(bottom = 22.dp, top = 2.dp)
+        ) {
+            val cleanSubject = lesson.subject.substringBefore(" (Гр.").substringBefore(" (").trim()
+            val displayGroup = when {
+                lesson.group.isNotBlank() && lesson.group != "—" -> lesson.group
+                lesson.subject.contains("Гр.") -> lesson.subject.substringAfter("Гр.").substringBefore(")").trim()
+                else -> ""
+            }
+
+            Text(
+                text = cleanSubject,
+                color = Color.White,
+                fontSize = 15.sp,
+                fontWeight = FontWeight.Bold,
+                lineHeight = 19.sp
+            )
+
+            Spacer(modifier = Modifier.height(6.dp))
+
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier
+                        .background(BgDark, RoundedCornerShape(8.dp))
+                        .padding(horizontal = 8.dp, vertical = 4.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Outlined.MeetingRoom,
+                        contentDescription = null,
+                        tint = PrimaryPurple,
+                        modifier = Modifier.size(13.dp)
+                    )
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text(
+                        text = "Ауд. ${lesson.room.ifBlank { "—" }}",
+                        color = Color.White,
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Medium
+                    )
+                }
+
+                if (displayGroup.isNotBlank()) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier
+                            .background(BgDark, RoundedCornerShape(8.dp))
+                            .padding(horizontal = 8.dp, vertical = 4.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Outlined.Groups,
+                            contentDescription = null,
+                            tint = Color(0xFFFF9800),
+                            modifier = Modifier.size(13.dp)
+                        )
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text(
+                            text = "Гр. $displayGroup",
+                            color = Color.White,
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Medium,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
 fun ScheduleScreen(
     navController: NavController,
     viewModel: ScheduleViewModel = viewModel()
@@ -92,6 +615,9 @@ fun ScheduleScreen(
     val state by viewModel.state.collectAsState()
     val context = LocalContext.current
     val haptic = LocalHapticFeedback.current
+    val prefs = context.getSharedPreferences("PulseAppPrefs", Context.MODE_PRIVATE)
+    val isTeacherMode = prefs.getBoolean("is_teacher_mode", false)
+    val teacherName = prefs.getString("teacher_name", "") ?: ""
 
     var homeworkList by remember { mutableStateOf(emptyList<HomeworkItem>()) }
     fun reloadHomeworks() { homeworkList = HomeworkManager.loadHomeworks(context) }
@@ -146,6 +672,17 @@ fun ScheduleScreen(
             activeStoryGroup = tutorialStory
             prefs.edit().putBoolean("tutorial_auto_opened", true).apply()
         }
+    }
+
+    // Teacher mode: show teacher's schedule
+    if (isTeacherMode && teacherName.isNotBlank()) {
+        TeacherScheduleView(
+            navController = navController,
+            teacherName = teacherName,
+            viewModel = viewModel,
+            state = state
+        )
+        return
     }
 
     LazyColumn(
@@ -1555,7 +2092,7 @@ fun ScheduleConstructorDialog(
     val context = LocalContext.current
 
     val themes = remember {
-        listOf(
+        listOf<Pair<String, CustomTheme>>(
             "Neon МГКАП" to CustomTheme(
                 0xFF101014.toInt(),
                 0xFFFFFFFF.toInt(),
