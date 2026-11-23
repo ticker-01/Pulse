@@ -183,10 +183,23 @@ fn apply_update(temp_path: &str, exe_path: &std::path::Path, _filename: &str) ->
 
     #[cfg(target_os = "linux")]
     {
+        // Linux: бинарник идёт в .tar.gz — сначала распаковываем.
         use std::process::Command;
+
+        let binary_name = "mgkap";
         let script = format!(
-            "sleep 2; mv -f '{}' '{}'; chmod +x '{}'; exec '{}'",
-            tmp, exe_str, exe_str, exe_str
+            r#"sleep 2
+TMPDIR=$(mktemp -d /tmp/mgkap-install-XXXXXX)
+cd "$TMPDIR"
+tar xzf '{}' 2>/dev/null
+if [ -f "./{}" ]; then
+  mv -f "./{}" '{}'
+  chmod +x '{}'
+  exec '{}'
+fi
+rm -rf "$TMPDIR"
+exec '{}'"#,
+            tmp, binary_name, binary_name, exe_str, exe_str, exe_str, exe_str
         );
         Command::new("sh")
             .args(["-c", &script])

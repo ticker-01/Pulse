@@ -110,12 +110,21 @@ pub fn check_from_body(body: &str, current: &str) -> Result<Option<UpdateInfo>, 
 }
 
 fn resolve_asset(assets: &[ReleaseAsset]) -> Result<ReleaseAsset, String> {
-    let pattern = match os_label() {
-        "windows" => "windows-x86_64",
-        "macos" => "macos-universal",
-        "linux" => "linux-x86_64",
+    let (pattern, prefer_suffix) = match os_label() {
+        "windows" => ("windows-x86_64", None),
+        "macos" => ("macos-universal", Some(".zip")),
+        "linux" => ("linux-x86_64", None),
         _ => return Err("неизвестная ОС".into()),
     };
+
+    // Сначала ищем с предпочтительным суффиксом (например, .zip вместо .dmg).
+    if let Some(suffix) = prefer_suffix {
+        if let Some(asset) = assets.iter().find(|a| {
+            a.name.contains(pattern) && a.name.ends_with(suffix)
+        }) {
+            return Ok(asset.clone());
+        }
+    }
 
     assets
         .iter()
