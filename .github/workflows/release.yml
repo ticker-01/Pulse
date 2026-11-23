@@ -347,19 +347,20 @@ jobs:
           merge-multiple: true
 
       - name: Собрать релизные файлы
+        working-directory: ${{ github.workspace }}
         run: |
           set -euo pipefail
           mkdir -p release
           VERSION="${GITHUB_REF_NAME#v}"
 
-          # Сортируем по имени, собираем checksums
-          cd _release
-          for f in *; do
+          echo "=== содержимое _release ==="
+          ls -la _release/ || echo "пусто"
+
+          for f in _release/*; do
             [ -f "$f" ] || continue
-            cp "$f" "../release/$f"
-            sha256sum "$f" >> "../release/checksums.txt"
+            cp "$f" "release/$(basename "$f")"
+            sha256sum "$f" >> release/checksums.txt
           done
-          cd ..
 
           echo "--- файлы релиза ---"
           ls -lh release/
@@ -369,6 +370,7 @@ jobs:
       - name: Создать Release
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        working-directory: ${{ github.workspace }}
         run: |
           set -euo pipefail
           VERSION="${GITHUB_REF_NAME}"

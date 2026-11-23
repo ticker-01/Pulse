@@ -669,14 +669,13 @@ impl PulseApp {
         let parsed = parser::parse_raw_text(&self.raw_text, &self.active_group, &self.bells);
 
         let cutoff = Local::now().date_naive() - Days::new(14);
-        let mut cache: ScheduleCache = ScheduleCache::new();
+        // Удаляем дни старше 14 дней — не храним вечность.
+        self.schedule.retain(|&date, _| date >= cutoff);
         for (date, lessons) in parsed {
             if !lessons.is_empty() && date >= cutoff {
-                cache.insert(date, lessons);
+                self.schedule.insert(date, lessons);
             }
         }
-
-        self.schedule = cache;
         if let Some(error) = self.store.save_schedule(&self.schedule) {
             self.set_status(StatusKind::Error, error);
         }
