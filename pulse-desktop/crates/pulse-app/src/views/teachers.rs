@@ -138,16 +138,28 @@ impl PulseApp {
 
             ui.separator();
 
-            ui.vertical(|ui| match self.selected_teacher.clone() {
-                Some(name) => self.teacher_panel(ui, &name, true, Source::Picked),
-                None => {
-                    empty_state(
-                        ui,
-                        "👤",
-                        "Выберите преподавателя",
-                        "Слева — список; справа появится его расписание по дням.",
-                    );
-                }
+            // Свой ScrollArea с ID от имени преподавателя: при смене
+            // выбора скролл сбрасывается в начало, а не остаётся на месте.
+            let scroll_id = match &self.selected_teacher {
+                Some(name) => format!("teacher-panel-{}", name),
+                None => "teacher-panel-none".to_string(),
+            };
+            ui.push_id(scroll_id, |ui| {
+                egui::ScrollArea::vertical()
+                    .auto_shrink([false, false])
+                    .show(ui, |ui| {
+                        ui.vertical(|ui| match self.selected_teacher.clone() {
+                            Some(name) => self.teacher_panel(ui, &name, true, Source::Picked),
+                            None => {
+                                empty_state(
+                                    ui,
+                                    "👤",
+                                    "Выберите преподавателя",
+                                    "Слева — список; справа появится его расписание по дням.",
+                                );
+                            }
+                        });
+                    });
             });
         });
 

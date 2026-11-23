@@ -1,6 +1,7 @@
 //! Корневая структура приложения: состояние, вкладки, фоновое обновление.
 
 use std::sync::mpsc::{self, Receiver, TryRecvError};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 use chrono::{Datelike, Days, Local, NaiveDate, NaiveTime};
 use pulse_core::bells::{default_schedule, BellConfig, BellDay, BellSlot};
@@ -12,6 +13,7 @@ use pulse_core::parser;
 use pulse_core::performance::Semester;
 use pulse_core::source::{self, FetchOutcome};
 use pulse_core::updater;
+use crate::notifier::{spawn, NotifyCommand};
 
 use crate::store::{Role, Settings, Store};
 use crate::theme;
@@ -312,6 +314,8 @@ pub(crate) struct PulseApp {
     pub(crate) update_check_active: bool,
     /// Флаг выхода: приложение готовится к перезапуску с обновлением.
     pub(crate) running: bool,
+    /// Канал для фоновых уведомлений ОС (начало/конец пар).
+    notify_tx: mpsc::Sender<NotifyCommand>,
 }
 
 impl PulseApp {
@@ -396,6 +400,7 @@ impl PulseApp {
             update_rx: None,
             update_check_active: false,
             running: true,
+            notify_tx: spawn(),
         };
 
         if let Some(warning) = warning {
@@ -421,6 +426,9 @@ impl PulseApp {
         // Фоновая проверка обновления приложения (если включено).
         app.schedule_update_check();
 
+        // Отправить расписание в поток уведомлений.
+        app.notify_schedule();
+
         app
     }
 
@@ -437,6 +445,12 @@ impl PulseApp {
     /// Текущее Unix-время (для меток автообновления, как `last_fetch_at`).
     pub(crate) fn now_unix(&self) -> i64 {
         Local::now().timestamp()
+    }
+
+    /// Отправить текущее расписание в поток уведомлений ОС.
+    pub(crate) fn notify_schedule(&self) {
+        let cache = Arc::new(self.schedule.clone());
+        let _ = self.notify_tx.send(NotifyCommand::UpdateSchedule(cache));
     }
 
     pub(crate) fn set_status(&mut self, kind: StatusKind, text: impl Into<String>) {
@@ -679,6 +693,7 @@ impl PulseApp {
         if let Some(error) = self.store.save_schedule(&self.schedule) {
             self.set_status(StatusKind::Error, error);
         }
+        self.notify_schedule();
         if self.selected_teacher.is_some() {
             self.rebuild_teacher_schedule();
         }
